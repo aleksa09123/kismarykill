@@ -1,0 +1,14 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+sqlalchemy[asyncio]>=2.0.30
+aiosqlite>=0.20.0
+asyncpg>=0.29.0
+geoalchemy2>=0.15.1
+pydantic-settings>=2.3.1
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+bcrypt<5
+python-multipart>=0.0.9
+Pillow>=10.0.0
+mediapipe>=0.10.14
+resend>=2.3.0
