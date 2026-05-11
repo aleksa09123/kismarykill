@@ -10,5 +10,6 @@ passlib[bcrypt]>=1.7.4
 bcrypt<5
 python-multipart>=0.0.9
 Pillow>=10.0.0
-mediapipe>=0.10.14
+numpy>=1.26.4,<3.0.0
+opencv-python-headless>=4.10.0.84,<5.0.0
 resend>=2.3.0

@@ -3,6 +3,8 @@ node_modules/
 .next/
 **/.next/
 backend/venv/
+__pycache__/
+*.py[cod]
 *.db
 .env
 .env.local

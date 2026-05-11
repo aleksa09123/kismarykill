@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-import os
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
-MPL_CONFIG_DIR = Path(__file__).resolve().parents[3] / ".matplotlib"
-MPL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("MPLCONFIGDIR", str(MPL_CONFIG_DIR))
-
+import cv2
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks.python import BaseOptions, vision
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -42,23 +36,26 @@ from app.schemas.auth import (
 
 router = APIRouter(tags=["auth"])
 UPLOADS_DIR = Path(__file__).resolve().parents[3] / "uploads"
-FACE_DETECTION_MODEL_PATH = Path(__file__).resolve().parents[3] / "face_detection_short_range.tflite"
+HAAR_CASCADE_PATH = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
 FACE_NOT_DETECTED_MESSAGE = "Face not detected! Please upload a clear photo of your face to unlock PLAY."
 
 
 def _image_contains_face(image: Image.Image) -> bool:
-    if not FACE_DETECTION_MODEL_PATH.exists():
-        raise RuntimeError(f"Face detection model not found: {FACE_DETECTION_MODEL_PATH}")
+    if not HAAR_CASCADE_PATH.exists():
+        raise RuntimeError(f"Face cascade model not found: {HAAR_CASCADE_PATH}")
 
-    image_array = np.asarray(image, dtype=np.uint8)
-    media_pipe_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_array)
-    options = vision.FaceDetectorOptions(
-        base_options=BaseOptions(model_asset_path=str(FACE_DETECTION_MODEL_PATH)),
-        min_detection_confidence=0.5,
+    detector = cv2.CascadeClassifier(str(HAAR_CASCADE_PATH))
+    if detector.empty():
+        raise RuntimeError("Failed to initialize Haar cascade detector")
+
+    grayscale = cv2.cvtColor(np.asarray(image, dtype=np.uint8), cv2.COLOR_RGB2GRAY)
+    faces = detector.detectMultiScale(
+        grayscale,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(72, 72),
     )
-    with vision.FaceDetector.create_from_options(options) as detector:
-        results = detector.detect(media_pipe_image)
-    return bool(results.detections)
+    return len(faces) > 0
 
 
 async def _rounds_played(session: AsyncSession, user_id: int) -> int:
