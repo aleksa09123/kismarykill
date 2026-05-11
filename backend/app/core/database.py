@@ -14,7 +14,14 @@ from app.models.vote import Vote
 
 
 def _resolved_database_url() -> URL:
-    url = make_url(settings.database_url)
+    raw_database_url = settings.database_url.strip()
+    if raw_database_url.startswith("postgres://"):
+        raw_database_url = "postgresql://" + raw_database_url[len("postgres://") :]
+
+    url = make_url(raw_database_url)
+    if url.get_backend_name() == "postgresql" and url.drivername != "postgresql+asyncpg":
+        url = url.set(drivername="postgresql+asyncpg")
+
     if url.get_backend_name() != "sqlite" or not url.database:
         return url
 
