@@ -2,17 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from geoalchemy2 import Geometry
-from geoalchemy2.elements import WKBElement
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum as SAEnum, Float, Integer, String, false, func
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.config import settings
 from app.models.base import Base
 from app.models.enums import Gender
-
-IS_SQLITE = make_url(settings.database_url).get_backend_name() == "sqlite"
 
 
 class User(Base):
@@ -55,14 +49,7 @@ class User(Base):
     otp_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     face_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     swipe_blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    if IS_SQLITE:
-        koordinati: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    else:
-        koordinati: Mapped[WKBElement | None] = mapped_column(
-            Geometry(geometry_type="POINT", srid=4326, spatial_index=True),
-            nullable=True,
-        )
+    koordinati: Mapped[str | None] = mapped_column(String(64), nullable=True)
     datum_registracije: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -3,17 +3,12 @@ from __future__ import annotations
 import random
 from types import SimpleNamespace
 
-from geoalchemy2 import WKTElement
 from sqlalchemy import String, cast, func, select
-from sqlalchemy.engine import make_url
 from sqlalchemy.engine.row import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.user import User
 from app.utils.geo import haversine_distance_km
-
-IS_SQLITE = make_url(settings.database_url).get_backend_name() == "sqlite"
 
 
 def _point_wkt(latitude: float, longitude: float) -> str:
@@ -48,10 +43,7 @@ class UserRepository:
     async def update_location(self, user: User, latitude: float, longitude: float) -> None:
         user.latitude = latitude
         user.longitude = longitude
-        if IS_SQLITE:
-            user.koordinati = _point_wkt(latitude=latitude, longitude=longitude)
-        else:
-            user.koordinati = WKTElement(_point_wkt(latitude=latitude, longitude=longitude), srid=4326)
+        user.koordinati = _point_wkt(latitude=latitude, longitude=longitude)
         await self.session.commit()
 
     async def get_random_users_in_radius(
@@ -65,12 +57,6 @@ class UserRepository:
     ) -> list[Row | SimpleNamespace]:
         user_gender = func.coalesce(User.gender, cast(User.pol, String))
 
-        geo_latitude = None
-        geo_longitude = None
-        if not IS_SQLITE:
-            geo_latitude = func.ST_Y(User.koordinati).label("geo_latitude")
-            geo_longitude = func.ST_X(User.koordinati).label("geo_longitude")
-
         selected_columns = [
             User.id,
             User.ime.label("name"),
@@ -80,8 +66,6 @@ class UserRepository:
             User.longitude.label("longitude"),
             User.koordinati.label("koordinati"),
         ]
-        if geo_latitude is not None and geo_longitude is not None:
-            selected_columns.extend([geo_latitude, geo_longitude])
 
         stmt = (
             select(*selected_columns)
@@ -101,14 +85,6 @@ class UserRepository:
         for row in rows:
             candidate_latitude = float(row.latitude) if row.latitude is not None else None
             candidate_longitude = float(row.longitude) if row.longitude is not None else None
-
-            if candidate_latitude is None or candidate_longitude is None:
-                if not IS_SQLITE and hasattr(row, "geo_latitude") and hasattr(row, "geo_longitude"):
-                    geo_latitude_value = getattr(row, "geo_latitude")
-                    geo_longitude_value = getattr(row, "geo_longitude")
-                    if geo_latitude_value is not None and geo_longitude_value is not None:
-                        candidate_latitude = float(geo_latitude_value)
-                        candidate_longitude = float(geo_longitude_value)
 
             if candidate_latitude is None or candidate_longitude is None:
                 parsed = _parse_point_wkt(row.koordinati)
@@ -151,11 +127,6 @@ class UserRepository:
         radius_km: float,
     ) -> list[SimpleNamespace]:
         user_gender = func.coalesce(User.gender, cast(User.pol, String))
-        geo_latitude = None
-        geo_longitude = None
-        if not IS_SQLITE:
-            geo_latitude = func.ST_Y(User.koordinati).label("geo_latitude")
-            geo_longitude = func.ST_X(User.koordinati).label("geo_longitude")
 
         selected_columns = [
             User.id,
@@ -165,8 +136,6 @@ class UserRepository:
             User.longitude.label("longitude"),
             User.koordinati.label("koordinati"),
         ]
-        if geo_latitude is not None and geo_longitude is not None:
-            selected_columns.extend([geo_latitude, geo_longitude])
 
         rows = (
             await self.session.execute(
@@ -184,14 +153,6 @@ class UserRepository:
         for row in rows:
             candidate_latitude = float(row.latitude) if row.latitude is not None else None
             candidate_longitude = float(row.longitude) if row.longitude is not None else None
-
-            if candidate_latitude is None or candidate_longitude is None:
-                if not IS_SQLITE and hasattr(row, "geo_latitude") and hasattr(row, "geo_longitude"):
-                    geo_latitude_value = getattr(row, "geo_latitude")
-                    geo_longitude_value = getattr(row, "geo_longitude")
-                    if geo_latitude_value is not None and geo_longitude_value is not None:
-                        candidate_latitude = float(geo_latitude_value)
-                        candidate_longitude = float(geo_longitude_value)
 
             if candidate_latitude is None or candidate_longitude is None:
                 parsed = _parse_point_wkt(row.koordinati)
