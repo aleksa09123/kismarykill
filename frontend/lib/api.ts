@@ -14,7 +14,11 @@ import type {
   ZoneDebugResponse
 } from "@/lib/types";
 
-const API_BASE_URL = "http://192.168.100.91:8000";
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+
+if (!API_BASE_URL) {
+  throw new Error("NEXT_PUBLIC_API_URL is not configured.");
+}
 
 const REQUEST_TIMEOUT_MS = 60000;
 
@@ -47,7 +51,7 @@ function alertAuthError(error: unknown): void {
 
 function alertConnectingToApi(): void {
   if (typeof window !== "undefined" && typeof window.alert === "function") {
-    window.alert("Connecting to: http://192.168.100.91:8000...");
+    window.alert(`Connecting to: ${API_BASE_URL}...`);
   }
 }
 
@@ -74,7 +78,7 @@ async function request<T>(path: string, init: RequestInit, accessToken?: string)
     }
 
     throw new Error(
-      `Could not reach API at ${API_BASE_URL}. Make sure backend is running on your LAN IP and CORS is configured.`
+      `Could not reach API at ${API_BASE_URL}. Check NEXT_PUBLIC_API_URL and backend CORS settings.`
     );
   } finally {
     clearTimeout(timeoutId);
