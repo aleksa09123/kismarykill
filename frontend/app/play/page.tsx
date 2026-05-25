@@ -4,9 +4,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { GameRound } from "@/components/game-round";
+import { LiveModeRound } from "@/components/live-mode-round";
 import { fetchCurrentUser } from "@/lib/api";
 import { clearSession, hasUnlockedProfilePhoto, patchSessionUser, readSession } from "@/lib/auth-session";
-import { normalizeGameMode, readActiveGameMode, writeActiveGameMode } from "@/lib/game-mode";
+import { normalizeGameMode, type GameMode, readActiveGameMode, writeActiveGameMode } from "@/lib/game-mode";
 import type { AuthResponse, AuthUser, VoteType } from "@/lib/types";
 import { recordVIPRoundVotes } from "@/lib/vip-stats";
 
@@ -16,7 +17,7 @@ export default function PlayPage() {
   const [user, setUser] = useState<AuthUser | null>(() => readSession()?.user ?? null);
   const [isLoading, setIsLoading] = useState<boolean>(() => readSession() === null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [mode, setMode] = useState<"classic" | "vip">(() => readActiveGameMode());
+  const [mode, setMode] = useState<GameMode>(() => readActiveGameMode());
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -122,14 +123,22 @@ export default function PlayPage() {
             {warning}
           </p>
         ) : null}
-        <GameRound
-          accessToken={session.access_token}
-          currentUser={user}
-          mode={mode}
-          onLogout={logout}
-          onBackToMenu={() => router.push("/dashboard")}
-          onVipConfirmRound={handleVipRoundConfirm}
-        />
+        {mode === "live" ? (
+          <LiveModeRound
+            currentUser={user}
+            onLogout={logout}
+            onBackToMenu={() => router.push("/dashboard")}
+          />
+        ) : (
+          <GameRound
+            accessToken={session.access_token}
+            currentUser={user}
+            mode={mode}
+            onLogout={logout}
+            onBackToMenu={() => router.push("/dashboard")}
+            onVipConfirmRound={handleVipRoundConfirm}
+          />
+        )}
       </div>
     </main>
   );

@@ -52,3 +52,46 @@ body {
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
   animation: shimmer 1.4s linear infinite;
 }
+
+@keyframes liveNeonPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(16, 185, 129, 0.2), 0 0 0 rgba(34, 211, 238, 0.2);
+    transform: translateY(0);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(16, 185, 129, 0.5), 0 0 16px rgba(34, 211, 238, 0.35);
+    transform: translateY(-1px);
+  }
+}
+
+.live-neon-pulse {
+  animation: liveNeonPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes liveGlitchOverlay {
+  0% {
+    clip-path: inset(0 0 0 0);
+    transform: translateX(0);
+  }
+  30% {
+    clip-path: inset(8% 0 52% 0);
+    transform: translateX(2px);
+  }
+  45% {
+    clip-path: inset(40% 0 24% 0);
+    transform: translateX(-2px);
+  }
+  65% {
+    clip-path: inset(12% 0 56% 0);
+    transform: translateX(1px);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    transform: translateX(0);
+  }
+}
+
+.live-glitch-overlay {
+  animation: liveGlitchOverlay 380ms steps(2, end) infinite;
+}

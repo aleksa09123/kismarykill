@@ -13,6 +13,7 @@ import { ENABLE_API_BOTS } from "@/lib/feature-flags";
 import {
   ACTIVE_GAME_MODE_STORAGE_KEY,
   ACTIVE_GAME_MODE_UPDATED_EVENT,
+  type GameMode,
   readActiveGameMode,
   writeActiveGameMode
 } from "@/lib/game-mode";
@@ -51,8 +52,6 @@ let cachedLocationOptions: LocationOptionCountry[] | null = null;
 type IconProps = {
   className?: string;
 };
-
-type PlayMode = "classic" | "vip";
 
 function readInitialSessionClient(): AuthResponse | null {
   if (typeof window === "undefined") {
@@ -154,6 +153,16 @@ function CrownIcon({ className = "h-3.5 w-3.5" }: IconProps) {
       <circle cx="5.6" cy="8" r="1.1" fill="currentColor" />
       <circle cx="12" cy="6" r="1.1" fill="currentColor" />
       <circle cx="18.4" cy="8" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}
+
+function LiveSignalIcon({ className = "h-3.5 w-3.5" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="2.1" fill="currentColor" />
+      <path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -313,7 +322,7 @@ export default function DashboardPage() {
   const [isReferralModalOpen, setIsReferralModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [botFeedback, setBotFeedback] = useState<BotFeedbackResponse | null>(null);
-  const [selectedMode, setSelectedMode] = useState<PlayMode>(() => readActiveGameMode());
+  const [selectedMode, setSelectedMode] = useState<GameMode>(() => readActiveGameMode());
   const [currentLocation, setCurrentLocationState] = useState<LocationSelectionResponse | null>(() => readInitialLocationClient());
 
   const [locationOptions, setLocationOptions] = useState<LocationOptionCountry[]>(() =>
@@ -390,7 +399,7 @@ export default function DashboardPage() {
     };
   }, [isMounted]);
 
-  const handleModeSelection = useCallback((mode: PlayMode) => {
+  const handleModeSelection = useCallback((mode: GameMode) => {
     setSelectedMode(mode);
     writeActiveGameMode(mode);
   }, []);
@@ -1063,7 +1072,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="rounded-2xl border border-blue-300/20 bg-[#061737]/75 p-1.5 shadow-[inset_0_1px_0_rgba(170,210,255,0.08)]">
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
               onClick={() => handleModeSelection("classic")}
@@ -1089,9 +1098,22 @@ export default function DashboardPage() {
               <CrownIcon className={`h-3.5 w-3.5 ${selectedMode === "vip" ? "text-fuchsia-200" : "text-violet-200/80"}`} />
               VIP Edition
             </button>
+            <button
+              type="button"
+              onClick={() => handleModeSelection("live")}
+              aria-pressed={selectedMode === "live"}
+              className={`inline-flex min-h-10 w-full touch-manipulation items-center justify-center gap-1.5 rounded-xl px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors duration-200 ${
+                selectedMode === "live"
+                  ? "border border-emerald-300/55 bg-gradient-to-r from-emerald-500/25 to-cyan-500/35 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.3)]"
+                  : "border border-blue-200/15 bg-[#071a40]/70 text-slate-300 active:bg-[#0a224f]"
+              }`}
+            >
+              <LiveSignalIcon className={`h-3.5 w-3.5 ${selectedMode === "live" ? "text-emerald-200" : "text-cyan-200/80"}`} />
+              Live Mode
+            </button>
           </div>
           <p className="mt-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
-            Active Mode: {selectedMode === "vip" ? "VIP Edition" : "Classic"}
+            Active Mode: {selectedMode === "vip" ? "VIP Edition" : selectedMode === "live" ? "Live Mode" : "Classic"}
           </p>
         </div>
 

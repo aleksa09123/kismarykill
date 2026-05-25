@@ -1,10 +1,13 @@
-export type GameMode = "classic" | "vip";
+export type GameMode = "classic" | "vip" | "live";
 
 export const ACTIVE_GAME_MODE_STORAGE_KEY = "kmk_active_mode";
 export const ACTIVE_GAME_MODE_UPDATED_EVENT = "kmk:active-game-mode-updated";
 
 export function normalizeGameMode(value: string | null | undefined): GameMode {
-  return value === "vip" ? "vip" : "classic";
+  if (value === "vip" || value === "live") {
+    return value;
+  }
+  return "classic";
 }
 
 export function readActiveGameMode(): GameMode {
