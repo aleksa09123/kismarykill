@@ -2,13 +2,21 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useEffect } from "react";
 
 import { AuthPanel } from "@/components/auth-panel";
-import { writeSession } from "@/lib/auth-session";
+import { readSession, writeSession } from "@/lib/auth-session";
 import type { AuthResponse } from "@/lib/types";
 
 export default function LoginPage() {
   const router = useRouter();
+
+  useEffect(() => {
+    const session = readSession();
+    if (session?.access_token) {
+      router.replace("/dashboard");
+    }
+  }, [router]);
 
   const handleAuthenticated = (payload: AuthResponse) => {
     writeSession(payload);
