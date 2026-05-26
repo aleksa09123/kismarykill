@@ -17,7 +17,14 @@ import {
   readActiveGameMode,
   writeActiveGameMode
 } from "@/lib/game-mode";
-import { safeGetStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
+import {
+  GLOBAL_LOCATION_OPTION,
+  LOCATION_SELECTION_STORAGE_KEY,
+  buildServerId,
+  persistLocationClient,
+  readInitialLocationClient,
+  readPersistedLocationClient
+} from "@/lib/location-storage";
 import type {
   AuthResponse,
   AuthUser,
@@ -43,11 +50,6 @@ const reactionStyle: Record<VoteType, string> = {
 const premiumFeedDescription = "Unlock your Live Feed to see exactly who Kissed, Married, or Killed you!";
 const LOCATION_SYNC_TIMEOUT_MS = 12000;
 const MAX_LOCATION_RESULTS = 250;
-const LOCATION_SELECTION_STORAGE_KEY = "kmk_selected_location_v1";
-const GLOBAL_LOCATION_OPTION: LocationOptionCountry = {
-  country_code: "GL",
-  country_name: "Global"
-};
 let cachedLocationOptions: LocationOptionCountry[] | null = null;
 
 type IconProps = {
@@ -224,80 +226,6 @@ function SkullIcon({ className = "h-16 w-16" }: IconProps) {
       <path d="M9.5 19.3h5M10.7 21h2.6" stroke="#252845" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
-}
-
-function readLocationCookieClient(): LocationSelectionResponse | null {
-  if (typeof document === "undefined") {
-    return null;
-  }
-  const item = document.cookie
-    .split("; ")
-    .find((chunk) => chunk.startsWith("user_location="));
-  if (!item) {
-    return null;
-  }
-  try {
-    const rawValue = item.split("=")[1] ?? "";
-    const parsed = JSON.parse(decodeURIComponent(rawValue)) as Partial<LocationSelectionResponse>;
-    if (!parsed.country_code || !parsed.country_name) {
-      return null;
-    }
-    return {
-      country_code: parsed.country_code,
-      country_name: parsed.country_name,
-      latitude: Number(parsed.latitude ?? 0),
-      longitude: Number(parsed.longitude ?? 0),
-      server_id:
-        typeof parsed.server_id === "string" && parsed.server_id.length > 0
-          ? parsed.server_id
-          : parsed.country_code.toLowerCase()
-    };
-  } catch {
-    return null;
-  }
-}
-
-function buildServerId(countryCode: string): string {
-  return countryCode.toLowerCase();
-}
-
-function readPersistedLocationClient(): LocationSelectionResponse | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const raw = safeGetStorageItem(LOCATION_SELECTION_STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<LocationSelectionResponse>;
-    if (!parsed.country_code || !parsed.country_name) {
-      return null;
-    }
-    return {
-      country_code: parsed.country_code,
-      country_name: parsed.country_name,
-      latitude: Number(parsed.latitude ?? 0),
-      longitude: Number(parsed.longitude ?? 0),
-      server_id:
-        typeof parsed.server_id === "string" && parsed.server_id.trim().length > 0
-          ? parsed.server_id
-          : buildServerId(parsed.country_code)
-    };
-  } catch {
-    return null;
-  }
-}
-
-function persistLocationClient(location: LocationSelectionResponse): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  safeSetStorageItem(LOCATION_SELECTION_STORAGE_KEY, JSON.stringify(location));
-}
-
-function readInitialLocationClient(): LocationSelectionResponse | null {
-  return readPersistedLocationClient() ?? readLocationCookieClient();
 }
 
 function ProfileFallback() {

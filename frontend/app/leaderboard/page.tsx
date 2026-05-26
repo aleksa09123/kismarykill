@@ -5,13 +5,20 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { fetchCurrentUser, fetchLeaderboard } from "@/lib/api";
+import { fetchCurrentLocation, fetchCurrentUser, fetchLeaderboard } from "@/lib/api";
 import { readSession } from "@/lib/auth-session";
 import { ENABLE_API_BOTS } from "@/lib/feature-flags";
 import { ACTIVE_GAME_MODE_UPDATED_EVENT, readActiveGameMode, type GameMode } from "@/lib/game-mode";
+import {
+  isGlobalCountryCode,
+  locationFromUser,
+  mergeLocationLabel,
+  persistLocationClient,
+  readInitialLocationClient
+} from "@/lib/location-storage";
 import { VIP_CELEBRITIES } from "@/lib/vip-data";
 import { getVIPStatForProfile, VIP_STATS_UPDATED_EVENT } from "@/lib/vip-stats";
-import type { AuthUser, LeaderboardEntry } from "@/lib/types";
+import type { AuthUser, LeaderboardEntry, LeaderboardResponse, LocationSelectionResponse } from "@/lib/types";
 
 function leaderboardModeLabel(mode: GameMode): string {
   if (mode === "live") {
@@ -23,18 +30,49 @@ function leaderboardModeLabel(mode: GameMode): string {
   return "VIP";
 }
 
-function locationLeaderboardTitle(user: AuthUser | null, mode: GameMode): string {
+function locationLeaderboardTitle(location: LocationSelectionResponse | null, mode: GameMode): string {
   if (mode === "vip") {
     return "Top VIP Profiles - Global";
   }
+
   const modeLabel = leaderboardModeLabel(mode);
-  const countryCode = (user?.country_code ?? "").trim().toUpperCase();
-  const countryName = (user?.country_name ?? "").trim();
+  const countryCode = (location?.country_code ?? "").trim().toUpperCase();
+  const countryName = (location?.country_name ?? "").trim();
   if (!countryCode) {
-    return `National Ranking - ${modeLabel}`;
+    return `Global Ranking - ${modeLabel}`;
   }
+
+  if (isGlobalCountryCode(countryCode)) {
+    return `Global Ranking - ${modeLabel}`;
+  }
+
   const countryLabel = countryName ? `${countryName} (${countryCode})` : countryCode;
-  return `National Ranking - ${modeLabel} - ${countryLabel}`;
+  return `National Ranking - ${countryLabel} - ${modeLabel}`;
+}
+
+function resolveLeaderboardLocation(
+  response: LeaderboardResponse,
+  activeLocation: LocationSelectionResponse | null,
+  currentUser: AuthUser
+): LocationSelectionResponse | null {
+  const responseCountryCode = response.country_code?.trim().toUpperCase() || null;
+  const activeCountryCode = activeLocation?.country_code?.trim().toUpperCase() || null;
+  const userCountryCode = currentUser.country_code?.trim().toUpperCase() || null;
+  const finalCountryCode = responseCountryCode ?? activeCountryCode ?? userCountryCode;
+  if (!finalCountryCode) {
+    return null;
+  }
+
+  const preferredName =
+    responseCountryCode && responseCountryCode === activeCountryCode
+      ? activeLocation?.country_name
+      : response.country_name;
+
+  return mergeLocationLabel(
+    finalCountryCode,
+    preferredName,
+    response.country_name ?? activeLocation?.country_name ?? currentUser.country_name ?? finalCountryCode
+  );
 }
 
 function buildVipLeaderboardEntries(): LeaderboardEntry[] {
@@ -73,6 +111,7 @@ export default function LeaderboardPage() {
   const router = useRouter();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [leaderboardUser, setLeaderboardUser] = useState<AuthUser | null>(null);
+  const [leaderboardLocation, setLeaderboardLocation] = useState<LocationSelectionResponse | null>(null);
   const [activeMode, setActiveMode] = useState<GameMode>("classic");
   const [hasMounted, setHasMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -133,22 +172,40 @@ export default function LeaderboardPage() {
           return;
         }
 
+        const storedLocation = readInitialLocationClient();
+        if (!cancelled) {
+          setLeaderboardLocation(storedLocation);
+        }
+
         const currentUser = await fetchCurrentUser(session.access_token);
+        let activeLocation = storedLocation ?? locationFromUser(currentUser);
+
+        if (!activeLocation) {
+          try {
+            activeLocation = await fetchCurrentLocation(session.access_token);
+            persistLocationClient(activeLocation);
+          } catch {
+            activeLocation = locationFromUser(currentUser);
+          }
+        }
+
         const leaderboardMode = mode === "live" ? "live" : "classic";
         const response = await fetchLeaderboard(
           session.access_token,
-          currentUser.country_code,
+          activeLocation?.country_code ?? currentUser.country_code,
           leaderboardMode
         );
 
         if (cancelled) {
           return;
         }
+        const resolvedLocation = resolveLeaderboardLocation(response, activeLocation, currentUser);
         setEntries(response.users);
+        setLeaderboardLocation(resolvedLocation);
         setLeaderboardUser({
           ...currentUser,
-          country_code: response.country_code ?? currentUser.country_code,
-          country_name: response.country_name ?? currentUser.country_name,
+          country_code: resolvedLocation?.country_code ?? response.country_code ?? currentUser.country_code,
+          country_name: resolvedLocation?.country_name ?? response.country_name ?? currentUser.country_name,
         });
       } catch (loadError) {
         if (cancelled) {
@@ -213,7 +270,7 @@ export default function LeaderboardPage() {
 
         <div className="space-y-3">
           <p className="rounded-xl bg-slate-900/70 px-3 py-2 text-sm text-cyan-100">
-            {locationLeaderboardTitle(leaderboardUser, activeMode)}
+            {locationLeaderboardTitle(leaderboardLocation ?? locationFromUser(leaderboardUser), activeMode)}
           </p>
           {isLoading || !hasMounted
             ? Array.from({ length: 10 }).map((_, index) => (

@@ -54,7 +54,7 @@ async def get_leaderboard(
 ) -> LeaderboardResponse:
     user_country = _normalized_country_filter(current_user.country_code)
     requested_country = _normalized_country_filter(country_code or country)
-    normalized_country = user_country or requested_country
+    normalized_country = requested_country or user_country
     normalized_mode = _normalized_mode_filter(mode)
     country_name = (
         current_user.country_name
