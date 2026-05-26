@@ -105,6 +105,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await live_connection_manager.close()
         _close_supabase_client(
             supabase_client=supabase_client,
             http_client=supabase_http_client,

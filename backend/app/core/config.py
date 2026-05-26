@@ -52,6 +52,10 @@ class Settings(BaseSettings):
             "ACCESS_TOKEN_EXPIRE_MINUTES",
         ),
     )
+    redis_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("REDIS_URL"),
+    )
     environment: str = Field(
         default="development",
         validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT", "NODE_ENV"),
