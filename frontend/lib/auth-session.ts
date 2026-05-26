@@ -5,6 +5,17 @@ import { safeClearStorage, safeGetStorageItem, safeRemoveStorageItem, safeSetSto
 export const AUTH_STORAGE_KEY = "kmk_auth_session";
 
 const PLACEHOLDER_TOKENS = ["placeholder", "default-avatar", "/default-avatar", "avatar-default"];
+const KNOWN_AUTH_COOKIE_NAMES = [
+  AUTH_STORAGE_KEY,
+  "access_token",
+  "auth_token",
+  "token",
+  "refresh_token",
+  "sb-access-token",
+  "sb-refresh-token",
+  "supabase-auth-token"
+];
+const AUTH_COOKIE_NAME_MARKERS = ["auth", "token", "session", "supabase", "sb-"];
 const AUTH_SESSION_SCHEMA_VERSION = 2;
 let sessionMemoryCache: AuthResponse | null | undefined;
 let ongoingSilentRecovery: Promise<boolean> | null = null;
@@ -79,6 +90,67 @@ function parseStoredSession(raw: string): AuthResponse | null {
   }
 }
 
+function expireCookie(name: string): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const cleanedName = name.trim();
+  if (!cleanedName) {
+    return;
+  }
+
+  const expires = "Thu, 01 Jan 1970 00:00:00 GMT";
+  const hostname = window.location.hostname;
+  const domains = new Set<string>([""]);
+
+  if (hostname && hostname !== "localhost") {
+    domains.add(hostname);
+    domains.add(`.${hostname}`);
+  }
+
+  domains.forEach((domain) => {
+    const domainPart = domain ? `; domain=${domain}` : "";
+    document.cookie = `${cleanedName}=; expires=${expires}; Max-Age=0; path=/${domainPart}; SameSite=Lax`;
+  });
+}
+
+function clearAuthCookies(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const cookieNames = new Set<string>(KNOWN_AUTH_COOKIE_NAMES);
+  document.cookie.split(";").forEach((cookie) => {
+    const name = cookie.split("=")[0]?.trim();
+    if (!name) {
+      return;
+    }
+
+    const normalizedName = name.toLowerCase();
+    if (AUTH_COOKIE_NAME_MARKERS.some((marker) => normalizedName.includes(marker))) {
+      cookieNames.add(name);
+    }
+  });
+
+  cookieNames.forEach(expireCookie);
+}
+
+function clearAuthPersistence(options: { clearAllStorage?: boolean } = {}): void {
+  sessionMemoryCache = null;
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (options.clearAllStorage) {
+    safeClearStorage("local");
+    safeClearStorage("session");
+  }
+
+  safeRemoveStorageItem(AUTH_STORAGE_KEY);
+  clearAuthCookies();
+}
+
 export function readSession(): AuthResponse | null {
   if (sessionMemoryCache !== undefined) {
     return sessionMemoryCache;
@@ -122,26 +194,28 @@ export function writeSession(session: AuthResponse): void {
 }
 
 export function clearSession(): void {
-  sessionMemoryCache = null;
-  if (typeof window === "undefined") {
-    return;
-  }
-  safeRemoveStorageItem(AUTH_STORAGE_KEY);
+  clearAuthPersistence();
 }
 
-export function hardResetAuthStateAndReload(): void {
-  sessionMemoryCache = null;
+export function hardResetAuthStateAndRedirectToLogin(): void {
   if (typeof window === "undefined") {
+    sessionMemoryCache = null;
     return;
   }
   if (hardResetInProgress) {
     return;
   }
+
   hardResetInProgress = true;
-  safeClearStorage("local");
-  safeRemoveStorageItem(AUTH_STORAGE_KEY);
-  safeClearStorage("session");
-  window.location.reload();
+  clearAuthPersistence({ clearAllStorage: true });
+
+  if (window.location.pathname !== "/login") {
+    window.location.replace("/login");
+  }
+}
+
+export function hardResetAuthStateAndReload(): void {
+  hardResetAuthStateAndRedirectToLogin();
 }
 
 export function patchSessionUser(nextUser: AuthUser): AuthResponse | null {

@@ -15,7 +15,7 @@ import type {
   VoteRoundRequest,
   VoteRoundResponse
 } from "@/lib/types";
-import { hardResetAuthStateAndReload } from "@/lib/auth-session";
+import { hardResetAuthStateAndRedirectToLogin } from "@/lib/auth-session";
 
 const rawApiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
 export const API_BASE_URL = rawApiBaseUrl.replace(/\/+$/, "");
@@ -87,6 +87,27 @@ function containsUserNotFoundSignal(raw: unknown): boolean {
   return normalized.includes("user_not_found") || normalized.includes("user not found");
 }
 
+function containsCredentialValidationSignal(raw: unknown): boolean {
+  if (raw === null || raw === undefined) {
+    return false;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("could not validate credentials") ||
+    normalized.includes("not authenticated") ||
+    normalized.includes("authentication credentials") ||
+    normalized.includes("invalid token") ||
+    normalized.includes("token is invalid") ||
+    normalized.includes("token expired") ||
+    normalized.includes("expired token") ||
+    normalized.includes("jwt") ||
+    normalized.includes("signature verification")
+  );
+}
+
 function shouldResetAuthState(
   params: {
     status: number;
@@ -96,10 +117,16 @@ function shouldResetAuthState(
   }
 ): boolean {
   const { status, detail, error, hadAuthorizationToken } = params;
+  if (!hadAuthorizationToken) {
+    return false;
+  }
+  if (status === 401 || status === 403) {
+    return true;
+  }
   if (containsUserNotFoundSignal(detail) || containsUserNotFoundSignal(error)) {
     return true;
   }
-  return false;
+  return containsCredentialValidationSignal(detail) || containsCredentialValidationSignal(error);
 }
 
 async function buildApiError(response: Response): Promise<{
@@ -203,7 +230,8 @@ async function request<T>(path: string, init: RequestInit, accessToken?: string)
         hadAuthorizationToken,
       })
     ) {
-      hardResetAuthStateAndReload();
+      hardResetAuthStateAndRedirectToLogin();
+      throw new ApiRequestError("Session expired. Redirecting to login.", apiError.status);
     }
     throw new ApiRequestError(apiError.message, apiError.status);
   }
@@ -424,7 +452,8 @@ export async function uploadProfilePicture(file: File, accessToken: string): Pro
           hadAuthorizationToken,
         })
       ) {
-        hardResetAuthStateAndReload();
+        hardResetAuthStateAndRedirectToLogin();
+        throw new ApiRequestError("Session expired. Redirecting to login.", apiError.status);
       }
       throw new ApiRequestError(apiError.message, apiError.status);
     }
