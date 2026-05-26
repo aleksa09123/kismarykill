@@ -17,6 +17,7 @@ import {
   readActiveGameMode,
   writeActiveGameMode
 } from "@/lib/game-mode";
+import { safeGetStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
 import type {
   AuthResponse,
   AuthUser,
@@ -264,7 +265,7 @@ function readPersistedLocationClient(): LocationSelectionResponse | null {
   if (typeof window === "undefined") {
     return null;
   }
-  const raw = window.localStorage.getItem(LOCATION_SELECTION_STORAGE_KEY);
+  const raw = safeGetStorageItem(LOCATION_SELECTION_STORAGE_KEY);
   if (!raw) {
     return null;
   }
@@ -292,7 +293,7 @@ function persistLocationClient(location: LocationSelectionResponse): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(LOCATION_SELECTION_STORAGE_KEY, JSON.stringify(location));
+  safeSetStorageItem(LOCATION_SELECTION_STORAGE_KEY, JSON.stringify(location));
 }
 
 function readInitialLocationClient(): LocationSelectionResponse | null {

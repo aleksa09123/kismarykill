@@ -18,6 +18,7 @@ HARD_CUTOFF_SECONDS = (
     INTRO_DURATION_SECONDS + BATTLE_DURATION_SECONDS + JUDGMENT_DURATION_SECONDS
 )
 COUNTRY_FALLBACK_WAIT_SECONDS = 8
+DISCONNECT_GRACE_SECONDS = 12
 
 
 def _normalize_gender(value: object | None) -> str:
@@ -80,6 +81,7 @@ class LiveRoom:
     created_at: datetime
     phase: str = "MATCH_FOUND"
     started_at: datetime | None = None
+    phase_ends_at: datetime | None = None
     decision_event: asyncio.Event = field(default_factory=asyncio.Event)
     phase_task: asyncio.Task[None] | None = None
 
@@ -116,13 +118,19 @@ class LiveConnectionManager:
         self._rooms_by_id: dict[str, LiveRoom] = {}
         self._room_by_user_id: dict[int, str] = {}
         self._fallback_match_task: asyncio.Task[None] | None = None
+        self._disconnect_grace_tasks: dict[int, asyncio.Task[None]] = {}
 
     async def connect(self, user_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
         previous_socket: WebSocket | None = None
+        pending_disconnect: asyncio.Task[None] | None = None
         async with self._state_lock:
+            pending_disconnect = self._disconnect_grace_tasks.pop(user_id, None)
             previous_socket = self._active_connections.get(user_id)
             self._active_connections[user_id] = websocket
+
+        if pending_disconnect is not None:
+            pending_disconnect.cancel()
 
         if previous_socket is not None and previous_socket is not websocket:
             try:
@@ -138,42 +146,75 @@ class LiveConnectionManager:
             },
         )
 
-    async def disconnect(self, user_id: int) -> None:
+    async def disconnect(self, user_id: int, websocket: WebSocket | None = None) -> None:
+        async with self._state_lock:
+            if websocket is not None and self._active_connections.get(user_id) is not websocket:
+                return
+            self._active_connections.pop(user_id, None)
+            existing_task = self._disconnect_grace_tasks.pop(user_id, None)
+            if existing_task is not None:
+                existing_task.cancel()
+            self._disconnect_grace_tasks[user_id] = asyncio.create_task(
+                self._run_disconnect_grace(user_id),
+                name=f"live-disconnect-grace-{user_id}",
+            )
+
+    async def _run_disconnect_grace(self, user_id: int) -> None:
+        try:
+            await asyncio.sleep(DISCONNECT_GRACE_SECONDS)
+            notifications: list[tuple[int, dict[str, object]]] = []
+            room_ids_to_start: list[str] = []
+            async with self._state_lock:
+                if user_id in self._active_connections:
+                    self._disconnect_grace_tasks.pop(user_id, None)
+                    return
+
+                current_task = asyncio.current_task()
+                if self._disconnect_grace_tasks.get(user_id) is current_task:
+                    self._disconnect_grace_tasks.pop(user_id, None)
+
+                notifications, room_ids_to_start = self._cleanup_disconnected_user_locked(user_id)
+
+            await self._fanout_notifications(notifications)
+            await self._start_room_loops(room_ids_to_start)
+        except asyncio.CancelledError:
+            return
+
+    def _cleanup_disconnected_user_locked(self, user_id: int) -> tuple[list[tuple[int, dict[str, object]]], list[str]]:
         notifications: list[tuple[int, dict[str, object]]] = []
         room_ids_to_start: list[str] = []
-        async with self._state_lock:
-            self._active_connections.pop(user_id, None)
-            self._remove_from_queue_locked(user_id)
+        self._remove_from_queue_locked(user_id)
 
-            room_id = self._room_by_user_id.get(user_id)
-            if room_id is not None:
-                room = self._rooms_by_id.get(room_id)
-                if room is not None:
-                    for participant_id in room.participant_ids:
-                        if participant_id == user_id:
-                            continue
-                        notifications.append(
-                            (
-                                participant_id,
-                                {
-                                    "type": "room_member_left",
-                                    "room_id": room_id,
-                                    "user_id": user_id,
-                                },
-                            )
+        room_id = self._room_by_user_id.get(user_id)
+        if room_id is not None:
+            room = self._rooms_by_id.get(room_id)
+            if room is not None:
+                for participant_id in room.participant_ids:
+                    if participant_id == user_id:
+                        continue
+                    notifications.append(
+                        (
+                            participant_id,
+                            {
+                                "type": "room_member_left",
+                                "room_id": room_id,
+                                "roomId": room_id,
+                                "user_id": user_id,
+                                "userId": user_id,
+                            },
                         )
+                    )
 
-                close_notifications, new_room_ids = self._close_room_locked(
-                    room_id=room_id,
-                    reason="participant_disconnected",
-                    requeue_connected=True,
-                    excluded_requeue_user_ids={user_id},
-                )
-                notifications.extend(close_notifications)
-                room_ids_to_start.extend(new_room_ids)
+            close_notifications, new_room_ids = self._close_room_locked(
+                room_id=room_id,
+                reason="participant_disconnected",
+                requeue_connected=True,
+                excluded_requeue_user_ids={user_id},
+            )
+            notifications.extend(close_notifications)
+            room_ids_to_start.extend(new_room_ids)
 
-        await self._fanout_notifications(notifications)
-        await self._start_room_loops(room_ids_to_start)
+        return notifications, room_ids_to_start
 
     async def join_queue(
         self,
@@ -227,10 +268,13 @@ class LiveConnectionManager:
                         user_id,
                         {
                             "type": "queue_joined",
+                            "action": "queue_joined",
                             "role": entry.role,
                             "gender": entry.gender,
                             "preferred_gender": entry.preferred_gender,
+                            "preferredGender": entry.preferred_gender,
                             "country_code": entry.country_code,
+                            "countryCode": entry.country_code,
                         },
                     )
                 )
@@ -249,18 +293,85 @@ class LiveConnectionManager:
 
     async def leave_queue(self, *, user_id: int) -> bool:
         removed = False
+        notifications: list[tuple[int, dict[str, object]]] = []
+        room_ids_to_start: list[str] = []
         async with self._state_lock:
+            pending_disconnect = self._disconnect_grace_tasks.pop(user_id, None)
+            if pending_disconnect is not None:
+                pending_disconnect.cancel()
             removed = self._remove_from_queue_locked(user_id)
+            room_id = self._room_by_user_id.get(user_id)
+            if room_id is not None:
+                close_notifications, new_room_ids = self._close_room_locked(
+                    room_id=room_id,
+                    reason="participant_left",
+                    requeue_connected=True,
+                    excluded_requeue_user_ids={user_id},
+                )
+                notifications.extend(close_notifications)
+                room_ids_to_start.extend(new_room_ids)
             self._schedule_fallback_match_locked()
 
         await self._send_to_user(
             user_id,
             {
                 "type": "queue_left",
+                "action": "queue_left",
                 "removed": removed,
             },
         )
+        await self._fanout_notifications(notifications)
+        await self._start_room_loops(room_ids_to_start)
         return removed
+
+    async def resume_room(self, *, user_id: int, room_id: object | None = None) -> None:
+        requested_room_id = str(room_id or "").strip()
+        payload: dict[str, object] | None = None
+        async with self._state_lock:
+            active_room_id = self._room_by_user_id.get(user_id)
+            if active_room_id is None:
+                payload = {
+                    "type": "room_resume_failed",
+                    "reason": "room_not_found",
+                }
+            elif requested_room_id and requested_room_id != active_room_id:
+                payload = {
+                    "type": "room_resume_failed",
+                    "reason": "room_mismatch",
+                    "room_id": active_room_id,
+                    "roomId": active_room_id,
+                }
+            else:
+                room = self._rooms_by_id.get(active_room_id)
+                if room is None:
+                    payload = {
+                        "type": "room_resume_failed",
+                        "reason": "room_not_found",
+                    }
+                else:
+                    participant_ids = list(room.participant_ids)
+                    phase_seconds_left = 0
+                    if room.phase_ends_at is not None:
+                        phase_seconds_left = max(
+                            0,
+                            int((room.phase_ends_at - datetime.now(UTC)).total_seconds()),
+                        )
+                    entry = room.entry_for_user(user_id)
+                    payload = {
+                        "type": "room_state",
+                        "room_id": room.room_id,
+                        "roomId": room.room_id,
+                        "role": entry.role if entry is not None else None,
+                        "phase": room.phase,
+                        "duration": phase_seconds_left,
+                        "participants": participant_ids,
+                        "participant_ids": participant_ids,
+                        "judge_id": room.judge_id,
+                        "judgeId": room.judge_id,
+                    }
+
+        if payload is not None:
+            await self._send_to_user(user_id, payload)
 
     async def relay_signaling_message(
         self,
@@ -280,7 +391,7 @@ class LiveConnectionManager:
             )
             return
 
-        target_raw = payload.get("target_user_id")
+        target_raw = payload.get("target_user_id", payload.get("targetUserId"))
         try:
             target_user_id = int(target_raw)  # type: ignore[arg-type]
         except Exception:
@@ -321,11 +432,14 @@ class LiveConnectionManager:
                         "type": message_type,
                         "room_id": room_id,
                         "from_user_id": from_user_id,
+                        "fromUserId": from_user_id,
                         "target_user_id": target_user_id,
+                        "targetUserId": target_user_id,
                         "sdp": payload.get("sdp"),
                         "candidate": payload.get("candidate"),
                         "mid": payload.get("mid"),
-                        "mline_index": payload.get("mline_index"),
+                        "mline_index": payload.get("mline_index", payload.get("mlineIndex")),
+                        "mlineIndex": payload.get("mline_index", payload.get("mlineIndex")),
                     }
 
         if error_payload is not None:
@@ -352,11 +466,17 @@ class LiveConnectionManager:
         participants: tuple[int, ...] | None = None
         error_payload: dict[str, object] | None = None
         should_mark_complete = _normalize_bool(
-            payload.get("round_complete", payload.get("is_final", payload.get("finalize"))),
+            payload.get(
+                "round_complete",
+                payload.get("roundComplete", payload.get("is_final", payload.get("finalize"))),
+            ),
             default=True,
         )
 
-        target_raw = payload.get("target_user_id", payload.get("user_id"))
+        target_raw = payload.get(
+            "target_user_id",
+            payload.get("targetUserId", payload.get("user_id", payload.get("userId"))),
+        )
         try:
             target_user_id = int(target_raw)  # type: ignore[arg-type]
         except Exception:
@@ -415,6 +535,7 @@ class LiveConnectionManager:
                     {
                         "type": "user_eliminated",
                         "user_id": target_user_id,
+                        "userId": target_user_id,
                     },
                 )
             )
@@ -452,6 +573,7 @@ class LiveConnectionManager:
             judge_user_id,
             {
                 "type": "judgment_marked_complete",
+                "action": "judgment_marked_complete",
             },
         )
 
@@ -511,6 +633,7 @@ class LiveConnectionManager:
                     room_id,
                     {
                         "type": "round_completed",
+                        "action": "round_completed",
                         "reason": "judge_decision_received",
                     },
                 )
@@ -527,8 +650,10 @@ class LiveConnectionManager:
                     room_id,
                     {
                         "type": "force_skip",
+                        "action": "force_skip",
                         "reason": "time_expired",
                         "hard_cutoff_seconds": HARD_CUTOFF_SECONDS,
+                        "hardCutoffSeconds": HARD_CUTOFF_SECONDS,
                     },
                 )
                 notifications, room_ids_to_start = await self._close_room(
@@ -563,6 +688,7 @@ class LiveConnectionManager:
             if room is None:
                 return None
             room.phase = phase
+            room.phase_ends_at = datetime.now(UTC) + timedelta(seconds=max(0, duration))
             participant_ids = room.participant_ids
 
         notifications = [
@@ -573,6 +699,7 @@ class LiveConnectionManager:
                     "phase": phase,
                     "duration": duration,
                     "room_id": room_id,
+                    "roomId": room_id,
                 },
             )
             for participant_id in participant_ids
@@ -666,6 +793,7 @@ class LiveConnectionManager:
                         requeue_entry.user_id,
                         {
                             "type": "queue_rejoined",
+                            "action": "queue_rejoined",
                             "reason": reason,
                             "role": requeue_entry.role,
                         },
@@ -734,9 +862,14 @@ class LiveConnectionManager:
                     judge_entry.user_id,
                     {
                         "type": "match_found",
+                        "action": "match_found",
                         "room_id": room_id,
+                        "roomId": room_id,
                         "role": "judge",
                         "participants": list(room.participant_ids),
+                        "participant_ids": list(room.participant_ids),
+                        "judge_id": judge_entry.user_id,
+                        "judgeId": judge_entry.user_id,
                     },
                 )
             )
@@ -746,9 +879,14 @@ class LiveConnectionManager:
                         contestant.user_id,
                         {
                             "type": "match_found",
+                            "action": "match_found",
                             "room_id": room_id,
+                            "roomId": room_id,
                             "role": "contestant",
                             "participants": list(room.participant_ids),
+                            "participant_ids": list(room.participant_ids),
+                            "judge_id": judge_entry.user_id,
+                            "judgeId": judge_entry.user_id,
                         },
                     )
                 )

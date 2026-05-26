@@ -1,3 +1,5 @@
+import { safeGetStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
+
 export type GameMode = "classic" | "vip" | "live";
 
 export const ACTIVE_GAME_MODE_STORAGE_KEY = "kmk_active_mode";
@@ -14,13 +16,13 @@ export function readActiveGameMode(): GameMode {
   if (typeof window === "undefined") {
     return "classic";
   }
-  return normalizeGameMode(window.localStorage.getItem(ACTIVE_GAME_MODE_STORAGE_KEY));
+  return normalizeGameMode(safeGetStorageItem(ACTIVE_GAME_MODE_STORAGE_KEY));
 }
 
 export function writeActiveGameMode(mode: GameMode): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(ACTIVE_GAME_MODE_STORAGE_KEY, mode);
+  safeSetStorageItem(ACTIVE_GAME_MODE_STORAGE_KEY, mode);
   window.dispatchEvent(new CustomEvent<GameMode>(ACTIVE_GAME_MODE_UPDATED_EVENT, { detail: mode }));
 }

@@ -3,6 +3,9 @@ import { Playfair_Display, Space_Grotesk } from "next/font/google";
 import Script from "next/script";
 import type { ReactNode } from "react";
 
+import { AppErrorBoundary } from "@/components/app-error-boundary";
+import { VersionSentinel } from "@/components/version-sentinel";
+
 import "./globals.css";
 
 const sans = Space_Grotesk({
@@ -34,7 +37,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sans.variable} ${display.variable} antialiased`}>
-        {children}
+        <AppErrorBoundary>
+          <VersionSentinel />
+          {children}
+        </AppErrorBoundary>
         <Script
           id="google-adsense-loader"
           async

@@ -16,6 +16,13 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if BACKEND_DIR not in sys.path:
     sys.path.append(BACKEND_DIR)
 
+APP_VERSION = (
+    os.environ.get("RENDER_GIT_COMMIT")
+    or os.environ.get("GIT_COMMIT_SHA")
+    or os.environ.get("VERCEL_GIT_COMMIT_SHA")
+    or "development"
+)
+
 from app.api.routes.auth import router as auth_router
 from app.api.routes.leaderboard import router as leaderboard_router
 from app.api.routes.location import router as location_router
@@ -158,6 +165,11 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/version", tags=["health"])
+async def version_check() -> dict[str, str]:
+    return {"status": "ok", "version": APP_VERSION}
+
+
 @app.get("/")
 def read_root() -> dict[str, str]:
     return {"status": "ok", "poruka": "Koren radi"}
@@ -196,35 +208,47 @@ async def live_mode_socket(websocket: WebSocket, user_id: int) -> None:
                 continue
 
             action = str(payload.get("type") or payload.get("action") or "").strip().lower()
-            if action == "join_queue":
+            if action in {"join_queue", "join", "find_match", "start_matchmaking", "start_queue"}:
                 await live_connection_manager.join_queue(
                     user_id=user_id,
                     role=str(payload.get("role") or ""),
-                    gender=payload.get("gender"),
-                    preferred_gender=payload.get("preferred_gender"),
-                    country_code=payload.get("country_code"),
+                    gender=payload.get("gender", payload.get("pol")),
+                    preferred_gender=payload.get("preferred_gender", payload.get("preferredGender")),
+                    country_code=payload.get(
+                        "country_code",
+                        payload.get("country", payload.get("countryCode")),
+                    ),
                 )
                 continue
 
-            if action == "leave_queue":
+            if action in {"leave_queue", "leave", "cancel_queue", "leave_live"}:
                 await live_connection_manager.leave_queue(user_id=user_id)
                 continue
 
-            if action in SIGNALING_TYPES:
+            if action in {"resume_room", "resume", "room_state"}:
+                await live_connection_manager.resume_room(
+                    user_id=user_id,
+                    room_id=payload.get("room_id", payload.get("roomId")),
+                )
+                continue
+
+            if action in SIGNALING_TYPES or action in {"icecandidate", "ice-candidate"}:
+                if action in {"icecandidate", "ice-candidate"}:
+                    payload["type"] = "ice_candidate"
                 await live_connection_manager.relay_signaling_message(
                     from_user_id=user_id,
                     payload=payload,
                 )
                 continue
 
-            if action in {"kill", "judge_kill", "judge_eliminate", "eliminate"}:
+            if action in {"kill", "judge_kill", "judgekill", "judge_eliminate", "judgeeliminate", "eliminate"}:
                 await live_connection_manager.submit_judge_kill_action(
                     judge_user_id=user_id,
                     payload=payload,
                 )
                 continue
 
-            if action in {"judgment_complete", "judge_complete", "judge_done"}:
+            if action in {"judgment_complete", "judgmentcomplete", "judge_complete", "judgecomplete", "judge_done", "judgedone"}:
                 await live_connection_manager.mark_judgment_complete(
                     judge_user_id=user_id,
                 )
@@ -255,7 +279,7 @@ async def live_mode_socket(websocket: WebSocket, user_id: int) -> None:
         except Exception:
             pass
     finally:
-        await live_connection_manager.disconnect(user_id)
+        await live_connection_manager.disconnect(user_id, websocket=websocket)
 
 
 if __name__ == "__main__":

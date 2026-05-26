@@ -1,4 +1,5 @@
 import type { VoteType } from "@/lib/types";
+import { safeGetStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
 
 export type VIPStatEntry = {
   kisses: number;
@@ -28,7 +29,7 @@ export function readVIPStats(): VIPStatsMap {
     return {};
   }
 
-  const raw = window.localStorage.getItem(VIP_STATS_STORAGE_KEY);
+  const raw = safeGetStorageItem(VIP_STATS_STORAGE_KEY);
   if (!raw) {
     return {};
   }
@@ -47,7 +48,7 @@ function writeVIPStats(stats: VIPStatsMap): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(VIP_STATS_STORAGE_KEY, JSON.stringify(stats));
+  safeSetStorageItem(VIP_STATS_STORAGE_KEY, JSON.stringify(stats));
   window.dispatchEvent(new CustomEvent<VIPStatsMap>(VIP_STATS_UPDATED_EVENT, { detail: stats }));
 }
 

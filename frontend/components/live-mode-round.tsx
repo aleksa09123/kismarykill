@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api";
+import { LIVE_ACTIVITY_STORAGE_KEY } from "@/components/version-sentinel";
+import { safeRemoveStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
 import type { AuthUser } from "@/lib/types";
 
 type LiveModeRoundProps = {
@@ -49,9 +51,16 @@ const RTC_CONFIGURATION: RTCConfiguration = {
 };
 
 const ROUND_FADE_OUT_MS = 460;
-const RECONNECT_DELAY_MS = 1200;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 15000;
 const PHASE_TICK_INTERVAL_MS = 250;
 const MATCH_SEARCH_TIMEOUT_MS = 20000;
+
+function reconnectDelayForAttempt(attempt: number): number {
+  const exponentialDelay = RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt);
+  const jitter = Math.floor(Math.random() * 350);
+  return Math.min(RECONNECT_MAX_DELAY_MS, exponentialDelay + jitter);
+}
 
 function StreamVideo({ stream, className, muted = false }: StreamVideoProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -163,6 +172,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
   const searchTimeoutRef = useRef<number | null>(null);
   const phaseEndAtRef = useRef<number | null>(null);
   const phaseTickerRef = useRef<number | null>(null);
@@ -170,6 +180,8 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
   const peerConnectionsRef = useRef<Record<number, RTCPeerConnection>>({});
   const pendingCandidatesRef = useRef<Record<number, RTCIceCandidateInit[]>>({});
   const selectedRoleRef = useRef<LiveRole>(selectedRole);
+  const viewStateRef = useRef<LiveViewState>(viewState);
+  const roomIdRef = useRef<string | null>(roomId);
   const keepSearchingRef = useRef(false);
   const queuedJoinRef = useRef(false);
   const isUnmountedRef = useRef(false);
@@ -179,6 +191,15 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
   useEffect(() => {
     selectedRoleRef.current = selectedRole;
   }, [selectedRole]);
+
+  useEffect(() => {
+    viewStateRef.current = viewState;
+    safeSetStorageItem(LIVE_ACTIVITY_STORAGE_KEY, viewState === "lobby" ? "0" : "1", "session");
+  }, [viewState]);
+
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
   const sendSocketMessage = useCallback((payload: Record<string, unknown>) => {
     const socket = wsRef.current;
@@ -294,8 +315,19 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         if (isUnmountedRef.current) {
           return;
         }
+        reconnectAttemptRef.current = 0;
         setConnectionStatus("connected");
         setErrorMessage(null);
+        const activeRoomId = roomIdRef.current;
+        if (activeRoomId && viewStateRef.current === "match") {
+          sendSocketMessage({
+            type: "resume_room",
+            room_id: activeRoomId,
+            roomId: activeRoomId,
+          });
+          setStatusMessage("Live connection restored.");
+          return;
+        }
         if (keepSearchingRef.current || queuedJoinRef.current || isSearchingRef.current) {
           sendJoinQueue();
         }
@@ -442,6 +474,41 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
               }
             }
 
+            return;
+          }
+
+          if (messageType === "room_state") {
+            const incomingParticipants = toIntList(payload.participants ?? payload.participant_ids);
+            const incomingRoomId = String(payload.room_id ?? payload.roomId ?? "").trim();
+            if (!incomingRoomId || incomingParticipants.length < 4) {
+              return;
+            }
+            const incomingJudgeId = asInt(payload.judge_id ?? payload.judgeId) ?? incomingParticipants[0] ?? null;
+            const incomingPhase = String(payload.phase ?? "LOBBY").trim().toUpperCase();
+            const incomingDuration = Math.max(0, Number.parseInt(String(payload.duration ?? "0"), 10));
+
+            setRoomId(incomingRoomId);
+            setParticipants(incomingParticipants);
+            setJudgeId(incomingJudgeId);
+            setViewState("match");
+            setErrorMessage(null);
+            setStatusMessage("Live room restored.");
+            if (incomingPhase === "INTRO" || incomingPhase === "BATTLE" || incomingPhase === "JUDGMENT") {
+              setPhase(incomingPhase);
+              setPhaseSecondsLeft(incomingDuration);
+            }
+            return;
+          }
+
+          if (messageType === "room_resume_failed") {
+            setStatusMessage("Live room could not be restored. Returning to matchmaking...");
+            closeAllPeerConnections();
+            stopLocalMedia();
+            resetRoundState();
+            keepSearchingRef.current = true;
+            queuedJoinRef.current = true;
+            setViewState("searching");
+            sendJoinQueue();
             return;
           }
 
@@ -685,7 +752,10 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         if (isUnmountedRef.current) {
           return;
         }
-        setErrorMessage("WebSocket connection was interrupted.");
+        setConnectionStatus("connecting");
+        if (viewStateRef.current === "match") {
+          setStatusMessage("Live connection interrupted. Reconnecting...");
+        }
       };
 
       socket.onclose = () => {
@@ -693,15 +763,26 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
           return;
         }
         wsRef.current = null;
-        setConnectionStatus("disconnected");
-        closeAllPeerConnections();
-        clearPhaseTicker();
-        if (keepSearchingRef.current) {
-          setViewState("searching");
-          setStatusMessage("Connection dropped. Trying to reconnect...");
+        const shouldReconnect = keepSearchingRef.current || viewStateRef.current === "match";
+        if (shouldReconnect) {
+          setConnectionStatus("connecting");
+          if (viewStateRef.current !== "match") {
+            setViewState("searching");
+          }
+          setStatusMessage(
+            viewStateRef.current === "match"
+              ? "Live connection interrupted. Reconnecting..."
+              : "Connection dropped. Trying to reconnect..."
+          );
           stopReconnectTimer();
+          const delay = reconnectDelayForAttempt(reconnectAttemptRef.current);
+          reconnectAttemptRef.current += 1;
           reconnectTimeoutRef.current = window.setTimeout(() => {
-            if (!keepSearchingRef.current || isUnmountedRef.current) {
+            if (isUnmountedRef.current) {
+              return;
+            }
+            const stillNeedsReconnect = keepSearchingRef.current || viewStateRef.current === "match";
+            if (!stillNeedsReconnect) {
               return;
             }
             const existingSocket = wsRef.current;
@@ -713,8 +794,13 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
             wsRef.current = newSocket;
             setConnectionStatus("connecting");
             attachSocketHandlers(newSocket);
-          }, RECONNECT_DELAY_MS);
+          }, delay);
+          return;
         }
+        reconnectAttemptRef.current = 0;
+        setConnectionStatus("disconnected");
+        closeAllPeerConnections();
+        clearPhaseTicker();
       };
     },
     [
@@ -810,6 +896,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
     (options?: { closeSocket?: boolean }) => {
       keepSearchingRef.current = false;
       queuedJoinRef.current = false;
+      reconnectAttemptRef.current = 0;
       clearSearchTimeout();
       stopReconnectTimer();
       clearPhaseTicker();
@@ -836,6 +923,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         options?.closeSocket === false ? previousStatus : "disconnected"
       );
       setFadeRoundOut(false);
+      safeSetStorageItem(LIVE_ACTIVITY_STORAGE_KEY, "0", "session");
     },
     [
       clearPhaseTicker,
@@ -851,6 +939,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
   useEffect(() => {
     return () => {
       isUnmountedRef.current = true;
+      safeRemoveStorageItem(LIVE_ACTIVITY_STORAGE_KEY, "session");
       leaveLiveMode();
     };
   }, [leaveLiveMode]);

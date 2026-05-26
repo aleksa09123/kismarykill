@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import cached_property
+import os
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +52,10 @@ class Settings(BaseSettings):
             "ACCESS_TOKEN_EXPIRE_MINUTES",
         ),
     )
+    environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT", "NODE_ENV"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
@@ -62,6 +67,19 @@ class Settings(BaseSettings):
     @cached_property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def validate_jwt_secret(self) -> "Settings":
+        production_like = (
+            self.environment.strip().lower() in {"production", "prod"}
+            or os.environ.get("RENDER") == "true"
+            or bool(os.environ.get("RENDER_SERVICE_ID"))
+        )
+        if production_like and self.jwt_secret_key == "change-this-in-production":
+            raise ValueError(
+                "JWT_SECRET_KEY or SECRET_KEY must be configured in production to keep sessions stable across restarts."
+            )
+        return self
 
 
 settings = Settings()

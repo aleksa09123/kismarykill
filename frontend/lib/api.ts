@@ -21,6 +21,7 @@ const rawApiBaseUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? "";
 export const API_BASE_URL = rawApiBaseUrl.replace(/\/+$/, "");
 
 const REQUEST_TIMEOUT_MS = 60000;
+const TRANSIENT_RETRY_DELAYS_MS = [400, 1200, 2500];
 const NO_CACHE_HEADERS = {
   "Cache-Control": "no-cache, no-store, max-age=0",
   Pragma: "no-cache",
@@ -98,10 +99,7 @@ function shouldResetAuthState(
   if (containsUserNotFoundSignal(detail) || containsUserNotFoundSignal(error)) {
     return true;
   }
-  if (!hadAuthorizationToken) {
-    return false;
-  }
-  return status === 401;
+  return false;
 }
 
 async function buildApiError(response: Response): Promise<{
@@ -171,9 +169,29 @@ async function request<T>(path: string, init: RequestInit, accessToken?: string)
     }
   };
 
+  const isIdempotentRequest = !init.method || init.method.toUpperCase() === "GET";
+  const sleep = (delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs));
   const tokenForRequest = accessToken;
   const hadAuthorizationToken = Boolean(tokenForRequest?.trim());
-  const response = await fetchOnce(tokenForRequest);
+  let response: Response | null = null;
+
+  for (let attempt = 0; attempt <= TRANSIENT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      response = await fetchOnce(tokenForRequest);
+      if (!isIdempotentRequest || response.status < 500 || attempt === TRANSIENT_RETRY_DELAYS_MS.length) {
+        break;
+      }
+    } catch (error) {
+      if (!isIdempotentRequest || attempt === TRANSIENT_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+    }
+    await sleep(TRANSIENT_RETRY_DELAYS_MS[Math.min(attempt, TRANSIENT_RETRY_DELAYS_MS.length - 1)]);
+  }
+
+  if (response === null) {
+    throw new ApiRequestError("Request failed before reaching the API.");
+  }
 
   if (!response.ok) {
     const apiError = await buildApiError(response);
