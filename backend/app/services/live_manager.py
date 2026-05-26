@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import WebSocket
@@ -17,6 +17,7 @@ JUDGMENT_DURATION_SECONDS = 15
 HARD_CUTOFF_SECONDS = (
     INTRO_DURATION_SECONDS + BATTLE_DURATION_SECONDS + JUDGMENT_DURATION_SECONDS
 )
+COUNTRY_FALLBACK_WAIT_SECONDS = 8
 
 
 def _normalize_gender(value: object | None) -> str:
@@ -114,6 +115,7 @@ class LiveConnectionManager:
         self._queue_by_user_id: dict[int, LiveQueueEntry] = {}
         self._rooms_by_id: dict[str, LiveRoom] = {}
         self._room_by_user_id: dict[int, str] = {}
+        self._fallback_match_task: asyncio.Task[None] | None = None
 
     async def connect(self, user_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -236,6 +238,7 @@ class LiveConnectionManager:
                 match_notifications, matched_room_ids = self._consume_ready_rooms_locked()
                 notifications.extend(match_notifications)
                 room_ids_to_start.extend(matched_room_ids)
+                self._schedule_fallback_match_locked()
 
         if immediate_error is not None:
             await self._send_to_user(user_id, immediate_error)
@@ -248,6 +251,7 @@ class LiveConnectionManager:
         removed = False
         async with self._state_lock:
             removed = self._remove_from_queue_locked(user_id)
+            self._schedule_fallback_match_locked()
 
         await self._send_to_user(
             user_id,
@@ -651,23 +655,26 @@ class LiveConnectionManager:
                     continue
 
                 if entry.role == "judge":
-                    self._judge_queue.append(entry)
+                    requeue_entry = replace(entry, enqueued_at=datetime.now(UTC))
+                    self._judge_queue.append(requeue_entry)
                 else:
-                    self._contestant_queue.append(entry)
-                self._queue_by_user_id[entry.user_id] = entry
+                    requeue_entry = replace(entry, enqueued_at=datetime.now(UTC))
+                    self._contestant_queue.append(requeue_entry)
+                self._queue_by_user_id[requeue_entry.user_id] = requeue_entry
                 notifications.append(
                     (
-                        entry.user_id,
+                        requeue_entry.user_id,
                         {
                             "type": "queue_rejoined",
                             "reason": reason,
-                            "role": entry.role,
+                            "role": requeue_entry.role,
                         },
                     )
                 )
 
         match_notifications, room_ids_to_start = self._consume_ready_rooms_locked()
         notifications.extend(match_notifications)
+        self._schedule_fallback_match_locked()
         return notifications, room_ids_to_start
 
     async def _fanout_notifications(self, notifications: list[tuple[int, dict[str, object]]]) -> None:
@@ -773,7 +780,109 @@ class LiveConnectionManager:
                 self._queue_by_user_id.pop(picked.user_id, None)
             return judge_entry, picked_contestants
 
+        now = datetime.now(UTC)
+        for judge_entry in sorted(self._judge_queue, key=lambda entry: entry.enqueued_at):
+            compatible_contestants = sorted(
+                (
+                    contestant
+                    for contestant in self._contestant_queue
+                    if self._is_compatible_pair(judge_entry, contestant)
+                ),
+                key=lambda entry: entry.enqueued_at,
+            )
+            if len(compatible_contestants) < 3:
+                continue
+
+            picked_contestants = compatible_contestants[:3]
+            oldest_entry = min(
+                (judge_entry, *picked_contestants),
+                key=lambda entry: entry.enqueued_at,
+            )
+            if now - oldest_entry.enqueued_at < timedelta(seconds=COUNTRY_FALLBACK_WAIT_SECONDS):
+                continue
+
+            self._judge_queue = [entry for entry in self._judge_queue if entry.user_id != judge_entry.user_id]
+            picked_ids = {entry.user_id for entry in picked_contestants}
+            self._contestant_queue = [
+                entry for entry in self._contestant_queue if entry.user_id not in picked_ids
+            ]
+            self._queue_by_user_id.pop(judge_entry.user_id, None)
+            for picked in picked_contestants:
+                self._queue_by_user_id.pop(picked.user_id, None)
+            return judge_entry, picked_contestants
+
         return None
+
+    def _next_fallback_delay_locked(self) -> float | None:
+        if not self._judge_queue or len(self._contestant_queue) < 3:
+            return None
+
+        now = datetime.now(UTC)
+        next_ready_at: datetime | None = None
+        for judge_entry in sorted(self._judge_queue, key=lambda entry: entry.enqueued_at):
+            compatible_contestants = sorted(
+                (
+                    contestant
+                    for contestant in self._contestant_queue
+                    if self._is_compatible_pair(judge_entry, contestant)
+                ),
+                key=lambda entry: entry.enqueued_at,
+            )
+            if len(compatible_contestants) < 3:
+                continue
+
+            picked_contestants = compatible_contestants[:3]
+            oldest_entry = min(
+                (judge_entry, *picked_contestants),
+                key=lambda entry: entry.enqueued_at,
+            )
+            ready_at = oldest_entry.enqueued_at + timedelta(seconds=COUNTRY_FALLBACK_WAIT_SECONDS)
+            if next_ready_at is None or ready_at < next_ready_at:
+                next_ready_at = ready_at
+
+        if next_ready_at is None:
+            return None
+        return max(0.0, (next_ready_at - now).total_seconds())
+
+    def _schedule_fallback_match_locked(self) -> None:
+        delay = self._next_fallback_delay_locked()
+        current_task = asyncio.current_task()
+        existing_task = self._fallback_match_task
+
+        if existing_task is not None and existing_task is not current_task and not existing_task.done():
+            existing_task.cancel()
+
+        if delay is None:
+            if existing_task is not current_task:
+                self._fallback_match_task = None
+            return
+
+        self._fallback_match_task = asyncio.create_task(
+            self._run_fallback_matchmaking_timer(delay),
+            name="live-country-fallback-matchmaking",
+        )
+
+    async def _run_fallback_matchmaking_timer(self, delay_seconds: float) -> None:
+        try:
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+
+            notifications: list[tuple[int, dict[str, object]]] = []
+            room_ids_to_start: list[str] = []
+            async with self._state_lock:
+                current_task = asyncio.current_task()
+                if self._fallback_match_task is current_task:
+                    self._fallback_match_task = None
+
+                match_notifications, matched_room_ids = self._consume_ready_rooms_locked()
+                notifications.extend(match_notifications)
+                room_ids_to_start.extend(matched_room_ids)
+                self._schedule_fallback_match_locked()
+
+            await self._fanout_notifications(notifications)
+            await self._start_room_loops(room_ids_to_start)
+        except asyncio.CancelledError:
+            return
 
     def _is_compatible_pair(self, judge_entry: LiveQueueEntry, contestant_entry: LiveQueueEntry) -> bool:
         judge_accepts = _preference_allows(judge_entry.preferred_gender, contestant_entry.gender)

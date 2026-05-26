@@ -8,7 +8,6 @@ import type { AuthUser } from "@/lib/types";
 type LiveModeRoundProps = {
   currentUser: AuthUser;
   onBackToMenu?: () => void;
-  onLogout: () => void;
 };
 
 type LiveRole = "judge" | "contestant";
@@ -52,6 +51,7 @@ const RTC_CONFIGURATION: RTCConfiguration = {
 const ROUND_FADE_OUT_MS = 460;
 const RECONNECT_DELAY_MS = 1200;
 const PHASE_TICK_INTERVAL_MS = 250;
+const MATCH_SEARCH_TIMEOUT_MS = 20000;
 
 function StreamVideo({ stream, className, muted = false }: StreamVideoProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -123,7 +123,7 @@ function formatSeconds(seconds: number): string {
 }
 
 function roleLabel(role: LiveRole): string {
-  return role === "judge" ? "Sudija" : "Takmicar";
+  return role === "judge" ? "Judge" : "Contestant";
 }
 
 function actionLabel(action: LiveJudgeAction): string {
@@ -144,7 +144,7 @@ function useStableBooleanRef(value: boolean) {
   return valueRef;
 }
 
-export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeRoundProps) {
+export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps) {
   const [selectedRole, setSelectedRole] = useState<LiveRole>("contestant");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [viewState, setViewState] = useState<LiveViewState>("lobby");
@@ -163,6 +163,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const searchTimeoutRef = useRef<number | null>(null);
   const phaseEndAtRef = useRef<number | null>(null);
   const phaseTickerRef = useRef<number | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -258,6 +259,13 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
     }
   }, []);
 
+  const clearSearchTimeout = useCallback(() => {
+    if (searchTimeoutRef.current !== null) {
+      window.clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+  }, []);
+
   const createJoinQueuePayload = useCallback(() => {
     const countryCode = (currentUser.country_code || "GL").trim().toUpperCase() || "GL";
     return {
@@ -273,7 +281,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
     const joined = sendSocketMessage(createJoinQueuePayload());
     if (joined) {
       queuedJoinRef.current = false;
-      setStatusMessage("Trazenje igraca...");
+      setStatusMessage("Finding players...");
       setErrorMessage(null);
     } else {
       queuedJoinRef.current = true;
@@ -299,7 +307,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
           try {
             payload = JSON.parse(event.data) as WsPayload;
           } catch {
-            setErrorMessage("Neispravna poruka sa servera.");
+            setErrorMessage("Invalid message from server.");
             return;
           }
 
@@ -318,13 +326,13 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
 
           if (messageType === "queue_joined") {
             setViewState("searching");
-            setStatusMessage("Trazenje igraca...");
+            setStatusMessage("Finding players...");
             return;
           }
 
           if (messageType === "queue_rejoined") {
             setViewState("searching");
-            setStatusMessage("Nova runda je spremna. Ponovo trazimo igrace...");
+            setStatusMessage("New round is ready. Searching again...");
             return;
           }
 
@@ -340,10 +348,11 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
             const incomingParticipants = toIntList(payload.participants);
             const incomingRoomId = String(payload.room_id ?? "").trim();
             if (!incomingRoomId || incomingParticipants.length < 4) {
-              setErrorMessage("Server je poslao nekompletan mecing podatak.");
+              setErrorMessage("Server returned incomplete match data.");
               return;
             }
 
+            clearSearchTimeout();
             setFadeRoundOut(false);
             setRoomId(incomingRoomId);
             setParticipants(incomingParticipants);
@@ -351,7 +360,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
             setSelectedTargetUserId(null);
             setEliminatedUserIds([]);
             setViewState("match");
-            setStatusMessage("Mec pronadjen. Priprema konekcija...");
+            setStatusMessage("Match found. Preparing connections...");
             setErrorMessage(null);
 
             try {
@@ -362,9 +371,9 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
               localStreamRef.current = stream;
               setLocalStream(stream);
             } catch (mediaError) {
-              const message = mediaError instanceof Error ? mediaError.message : "Nije moguce otvoriti kameru i mikrofon.";
+              const message = mediaError instanceof Error ? mediaError.message : "Could not open camera and microphone.";
               setErrorMessage(message);
-              setStatusMessage("Mec pronadjen, ali kamera/mikrofon nisu dostupni.");
+              setStatusMessage("Match found, but camera/microphone are unavailable.");
             }
 
             for (const participantUserId of incomingParticipants) {
@@ -428,7 +437,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
                   }
                 } catch (offerError) {
                   const message = offerError instanceof Error ? offerError.message : "Offer exchange failed.";
-                  setErrorMessage(`Signal greska: ${message}`);
+                  setErrorMessage(`Signal error: ${message}`);
                 }
               }
             }
@@ -549,7 +558,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
                 }
               } catch (offerError) {
                 const message = offerError instanceof Error ? offerError.message : "Offer handling failed.";
-                setErrorMessage(`Signal greska: ${message}`);
+                setErrorMessage(`Signal error: ${message}`);
               }
               return;
             }
@@ -574,7 +583,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
                 }
               } catch (answerError) {
                 const message = answerError instanceof Error ? answerError.message : "Answer handling failed.";
-                setErrorMessage(`Signal greska: ${message}`);
+                setErrorMessage(`Signal error: ${message}`);
               }
               return;
             }
@@ -627,7 +636,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
               previous.includes(eliminatedId) ? previous : [...previous, eliminatedId]
             );
             closePeerConnection(eliminatedId);
-            setStatusMessage(`Takmicar #${eliminatedId} je eliminisan.`);
+            setStatusMessage(`Contestant #${eliminatedId} was eliminated.`);
             return;
           }
 
@@ -635,7 +644,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
             const leftUserId = asInt(payload.user_id);
             if (leftUserId !== null) {
               closePeerConnection(leftUserId);
-              setStatusMessage(`Igrac #${leftUserId} je napustio sobu.`);
+              setStatusMessage(`Player #${leftUserId} left the room.`);
             }
             return;
           }
@@ -644,8 +653,8 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
             setFadeRoundOut(true);
             setStatusMessage(
               messageType === "force_skip"
-                ? "Vreme je isteklo. Automatski skip i novi matchmaking..."
-                : "Runda je zavrsena. Vracanje u lobby..."
+                ? "Time expired. Auto-skipping and starting new matchmaking..."
+                : "Round finished. Returning to lobby..."
             );
             window.setTimeout(() => {
               closeAllPeerConnections();
@@ -654,7 +663,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
               setFadeRoundOut(false);
               if (keepSearchingRef.current) {
                 setViewState("searching");
-                setStatusMessage("Trazenje igraca...");
+                setStatusMessage("Finding players...");
                 sendJoinQueue();
               } else {
                 setViewState("lobby");
@@ -676,7 +685,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
         if (isUnmountedRef.current) {
           return;
         }
-        setErrorMessage("WebSocket konekcija je prekinuta.");
+        setErrorMessage("WebSocket connection was interrupted.");
       };
 
       socket.onclose = () => {
@@ -689,7 +698,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
         clearPhaseTicker();
         if (keepSearchingRef.current) {
           setViewState("searching");
-          setStatusMessage("Veza je pukla. Pokusavam ponovno povezivanje...");
+          setStatusMessage("Connection dropped. Trying to reconnect...");
           stopReconnectTimer();
           reconnectTimeoutRef.current = window.setTimeout(() => {
             if (!keepSearchingRef.current || isUnmountedRef.current) {
@@ -710,6 +719,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
     },
     [
       clearPhaseTicker,
+      clearSearchTimeout,
       closeAllPeerConnections,
       closePeerConnection,
       currentUser.id,
@@ -743,20 +753,64 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
   const requestMatchmaking = useCallback(() => {
     keepSearchingRef.current = true;
     queuedJoinRef.current = true;
+    clearSearchTimeout();
     setViewState("searching");
     setErrorMessage(null);
-    setStatusMessage("Povezivanje na live server...");
+    setStatusMessage("Connecting to live server...");
+    searchTimeoutRef.current = window.setTimeout(() => {
+      if (!keepSearchingRef.current) {
+        return;
+      }
+
+      searchTimeoutRef.current = null;
+      keepSearchingRef.current = false;
+      queuedJoinRef.current = false;
+      stopReconnectTimer();
+      clearPhaseTicker();
+      closeAllPeerConnections();
+      stopLocalMedia();
+      resetRoundState();
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        sendSocketMessage({ type: "leave_queue" });
+      }
+
+      if (wsRef.current) {
+        try {
+          wsRef.current.close(1000, "match_search_timeout");
+        } catch {
+          // ignore close failures
+        }
+        wsRef.current = null;
+      }
+
+      setConnectionStatus("disconnected");
+      setViewState("lobby");
+      setStatusMessage(null);
+      setErrorMessage("Match not found. Please try again.");
+    }, MATCH_SEARCH_TIMEOUT_MS);
     ensureSocketConnected();
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       sendJoinQueue();
     }
-  }, [ensureSocketConnected, sendJoinQueue]);
+  }, [
+    clearPhaseTicker,
+    clearSearchTimeout,
+    closeAllPeerConnections,
+    ensureSocketConnected,
+    resetRoundState,
+    sendJoinQueue,
+    sendSocketMessage,
+    stopLocalMedia,
+    stopReconnectTimer,
+  ]);
 
   const leaveLiveMode = useCallback(
     (options?: { closeSocket?: boolean }) => {
       keepSearchingRef.current = false;
       queuedJoinRef.current = false;
+      clearSearchTimeout();
       stopReconnectTimer();
       clearPhaseTicker();
       closeAllPeerConnections();
@@ -778,13 +832,15 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
 
       setViewState("lobby");
       setStatusMessage(null);
-      setConnectionStatus(options?.closeSocket === false ? connectionStatus : "disconnected");
+      setConnectionStatus((previousStatus) =>
+        options?.closeSocket === false ? previousStatus : "disconnected"
+      );
       setFadeRoundOut(false);
     },
     [
       clearPhaseTicker,
+      clearSearchTimeout,
       closeAllPeerConnections,
-      connectionStatus,
       resetRoundState,
       sendSocketMessage,
       stopLocalMedia,
@@ -815,7 +871,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
 
       if (action === "kill") {
         if (!selectedTargetUserId) {
-          setErrorMessage("Izaberi takmicara pre KILL akcije.");
+          setErrorMessage("Choose a contestant before using KILL.");
           return;
         }
         sendSocketMessage({
@@ -823,7 +879,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
           target_user_id: selectedTargetUserId,
           round_complete: true,
         });
-        setStatusMessage(`Poslat KILL za korisnika #${selectedTargetUserId}.`);
+        setStatusMessage(`KILL sent for user #${selectedTargetUserId}.`);
         setErrorMessage(null);
         return;
       }
@@ -833,7 +889,7 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
         decision: action,
         target_user_id: selectedTargetUserId,
       });
-      setStatusMessage(`${actionLabel(action)} odluka je poslata.`);
+      setStatusMessage(`${actionLabel(action)} decision sent.`);
       setErrorMessage(null);
     },
     [amJudge, phase, selectedTargetUserId, sendSocketMessage]
@@ -936,13 +992,6 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
             >
               Back
             </button>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="rounded-full border border-red-300/40 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/25"
-            >
-              Logout
-            </button>
           </div>
         </div>
       </header>
@@ -974,58 +1023,60 @@ export function LiveModeRound({ currentUser, onBackToMenu, onLogout }: LiveModeR
         <p className="rounded-2xl border border-emerald-300/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">{statusMessage}</p>
       ) : null}
 
-      {viewState === "lobby" ? (
+      {viewState !== "match" ? (
         <div className="space-y-4 rounded-3xl border border-cyan-300/20 bg-[radial-gradient(90%_80%_at_20%_0%,rgba(34,211,238,0.16),transparent_70%),linear-gradient(170deg,#040f29_0%,#02081a_100%)] p-4">
-          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-100/85">Izaberi ulogu</p>
+          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-100/85">CHOOSE YOUR ROLE</p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
+              disabled={viewState === "searching"}
               onClick={() => setSelectedRole("judge")}
               className={`rounded-2xl border px-3 py-4 text-left transition ${
                 selectedRole === "judge"
                   ? "border-amber-300/55 bg-amber-500/15 text-amber-100"
                   : "border-blue-200/20 bg-[#081a43]/70 text-slate-200 hover:border-amber-300/40"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-70`}
             >
-              <p className="text-xs uppercase tracking-[0.18em] text-amber-200">👑 Judge</p>
-              <p className="mt-1 text-sm font-semibold">Zelim da ocjenjujem</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-amber-200">Judge</p>
+              <p className="mt-1 text-sm font-semibold">I want to judge</p>
             </button>
             <button
               type="button"
+              disabled={viewState === "searching"}
               onClick={() => setSelectedRole("contestant")}
               className={`rounded-2xl border px-3 py-4 text-left transition ${
                 selectedRole === "contestant"
                   ? "border-fuchsia-300/55 bg-fuchsia-500/15 text-fuchsia-100"
                   : "border-blue-200/20 bg-[#081a43]/70 text-slate-200 hover:border-fuchsia-300/40"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-70`}
             >
-              <p className="text-xs uppercase tracking-[0.18em] text-fuchsia-200">🎭 Contestant</p>
-              <p className="mt-1 text-sm font-semibold">Zelim da budem ocjenjivan</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-fuchsia-200">Contestant</p>
+              <p className="mt-1 text-sm font-semibold">I want to be judged</p>
             </button>
           </div>
           <button
             type="button"
+            disabled={viewState === "searching"}
             onClick={requestMatchmaking}
-            className="live-neon-pulse inline-flex min-h-12 w-full items-center justify-center rounded-2xl border border-emerald-300/60 bg-[linear-gradient(90deg,rgba(16,185,129,0.35),rgba(6,182,212,0.35))] px-4 text-sm font-bold uppercase tracking-[0.16em] text-emerald-50 shadow-[0_14px_36px_rgba(16,185,129,0.35)]"
+            className="live-neon-pulse inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-emerald-300/60 bg-[linear-gradient(90deg,rgba(16,185,129,0.35),rgba(6,182,212,0.35))] px-4 text-sm font-bold uppercase tracking-[0.16em] text-emerald-50 shadow-[0_14px_36px_rgba(16,185,129,0.35)] disabled:cursor-wait disabled:opacity-80"
           >
-            Trazi mec
+            {viewState === "searching" ? (
+              <span className="h-4 w-4 rounded-full border-2 border-emerald-100/30 border-t-emerald-50 animate-spin" />
+            ) : null}
+            {viewState === "searching" ? "FINDING MATCH..." : "FIND MATCH"}
           </button>
-        </div>
-      ) : null}
-
-      {viewState === "searching" ? (
-        <div className="space-y-3 rounded-3xl border border-cyan-300/20 bg-[#04132f]/90 p-5 text-center">
-          <p className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Matchmaking Lobby</p>
-          <h3 className="text-xl font-bold text-white">Trazenje igraca...</h3>
-          <div className="mx-auto h-14 w-14 rounded-full border-4 border-cyan-300/30 border-t-cyan-200 animate-spin" />
-          <p className="text-xs text-slate-300">Uloga: {roleLabel(selectedRole)}</p>
-          <button
-            type="button"
-            onClick={() => leaveLiveMode({ closeSocket: false })}
-            className="mx-auto rounded-full border border-amber-300/40 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/20"
-          >
-            Napusti queue
-          </button>
+          {viewState === "searching" ? (
+            <div className="space-y-3 rounded-2xl border border-cyan-300/20 bg-[#04132f]/80 p-4 text-center">
+              <p className="text-xs text-slate-300">Role: {roleLabel(selectedRole)}</p>
+              <button
+                type="button"
+                onClick={() => leaveLiveMode({ closeSocket: false })}
+                className="mx-auto rounded-full border border-amber-300/40 bg-amber-500/10 px-4 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/20"
+              >
+                Cancel search
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

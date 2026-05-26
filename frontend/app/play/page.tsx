@@ -126,7 +126,6 @@ export default function PlayPage() {
         {mode === "live" ? (
           <LiveModeRound
             currentUser={user}
-            onLogout={logout}
             onBackToMenu={() => router.push("/dashboard")}
           />
         ) : (
