@@ -300,11 +300,19 @@ export async function updateCurrentUser(payload: UpdateProfileRequest, accessTok
   );
 }
 
-export async function fetchLeaderboard(accessToken: string, countryCode?: string | null) {
+export async function fetchLeaderboard(accessToken: string, countryCode?: string | null, mode?: string | null) {
   const normalizedCountry = (countryCode ?? "").trim().toUpperCase();
-  const countryQuery = normalizedCountry && normalizedCountry !== "GL" ? `?country_code=${normalizedCountry}` : "";
+  const params = new URLSearchParams();
+  if (normalizedCountry) {
+    params.set("country_code", normalizedCountry);
+  }
+  const normalizedMode = (mode ?? "").trim().toLowerCase();
+  if (normalizedMode) {
+    params.set("mode", normalizedMode);
+  }
+  const query = params.toString();
   return request<LeaderboardResponse>(
-    `/leaderboard${countryQuery}`,
+    `/leaderboard${query ? `?${query}` : ""}`,
     {
       method: "GET"
     },

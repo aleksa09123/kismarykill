@@ -18,3 +18,6 @@ class LeaderboardEntry(BaseModel):
 
 class LeaderboardResponse(BaseModel):
     users: list[LeaderboardEntry]
+    country_code: str | None = None
+    country_name: str | None = None
+    mode: str | None = None

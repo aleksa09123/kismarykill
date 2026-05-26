@@ -34,24 +34,44 @@ def _normalized_country_filter(country_code: str | None) -> str | None:
     normalized = country_code.strip().upper()
     if len(normalized) != 2:
         return None
-    if normalized == "GL":
-        return None
     return normalized
+
+
+def _normalized_mode_filter(mode: str | None) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized in {"classic", "live"}:
+        return normalized
+    return "classic"
 
 
 @router.get("/leaderboard", response_model=LeaderboardResponse)
 async def get_leaderboard(
     country_code: str | None = Query(default=None, min_length=2, max_length=2),
-    _: User = Depends(get_current_user),
+    country: str | None = Query(default=None, min_length=2, max_length=2),
+    mode: str | None = Query(default="classic"),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> LeaderboardResponse:
-    normalized_country = _normalized_country_filter(country_code)
+    user_country = _normalized_country_filter(current_user.country_code)
+    requested_country = _normalized_country_filter(country_code or country)
+    normalized_country = user_country or requested_country
+    normalized_mode = _normalized_mode_filter(mode)
+    country_name = (
+        current_user.country_name
+        if user_country and normalized_country == user_country and current_user.country_name
+        else normalized_country
+    )
+
+    if normalized_country is None:
+        return LeaderboardResponse(users=[], country_code=None, country_name=None, mode=normalized_mode)
+
+    synthetic_bot_rows: list[LeaderboardEntry] = []
 
     if normalized_country and ENABLE_API_BOTS:
         bot_service = BotSimulationService(session)
         await bot_service.ensure_local_ai_bots_for_location(
             country_code=normalized_country,
-            country_name=normalized_country,
+            country_name=country_name or normalized_country,
             latitude=0.0,
             longitude=0.0,
             target_count=LOCAL_AI_BOT_TARGET_COUNT,
@@ -61,13 +81,12 @@ async def get_leaderboard(
             limit=LOCAL_AI_BOT_TARGET_COUNT,
         )
 
-        leaderboard_rows: list[LeaderboardEntry] = []
         for bot in local_bots:
             score, kisses, marries, kills, win_rate = _synthetic_local_stats(
                 bot_id=bot.id,
                 country_code=normalized_country,
             )
-            leaderboard_rows.append(
+            synthetic_bot_rows.append(
                 LeaderboardEntry(
                     rank=0,
                     user_id=bot.id,
@@ -81,28 +100,6 @@ async def get_leaderboard(
                     win_rate=win_rate,
                 )
             )
-
-        top_rows = sorted(
-            leaderboard_rows,
-            key=lambda entry: (entry.score, entry.rounds_played, entry.win_rate),
-            reverse=True,
-        )[:100]
-        ranked = [
-            LeaderboardEntry(
-                rank=index + 1,
-                user_id=entry.user_id,
-                name=entry.name,
-                profile_image_url=entry.profile_image_url,
-                score=entry.score,
-                kisses=entry.kisses,
-                marries=entry.marries,
-                kills=entry.kills,
-                rounds_played=entry.rounds_played,
-                win_rate=entry.win_rate,
-            )
-            for index, entry in enumerate(top_rows)
-        ]
-        return LeaderboardResponse(users=ranked)
 
     marry_points = cast(3, Integer)
     kiss_points = cast(2, Integer)
@@ -142,15 +139,13 @@ async def get_leaderboard(
         )
         .limit(100)
     )
-    if normalized_country:
-        stmt = stmt.where(User.country_code == normalized_country)
-    if not ENABLE_API_BOTS:
-        stmt = stmt.where(User.is_bot.is_(False))
+    stmt = stmt.where(User.country_code == normalized_country)
+    stmt = stmt.where(User.is_bot.is_(False))
 
     rows = (await session.execute(stmt)).all()
-    entries = [
+    real_entries = [
         LeaderboardEntry(
-            rank=index + 1,
+            rank=0,
             user_id=row.user_id,
             name=row.name,
             profile_image_url=row.profile_image_url,
@@ -168,6 +163,31 @@ async def get_leaderboard(
                 1,
             ),
         )
-        for index, row in enumerate(rows)
+        for row in rows
     ]
-    return LeaderboardResponse(users=entries)
+    top_rows = sorted(
+        [*real_entries, *synthetic_bot_rows],
+        key=lambda entry: (entry.score, entry.rounds_played, entry.win_rate),
+        reverse=True,
+    )[:100]
+    entries = [
+        LeaderboardEntry(
+            rank=index + 1,
+            user_id=entry.user_id,
+            name=entry.name,
+            profile_image_url=entry.profile_image_url,
+            score=entry.score,
+            kisses=entry.kisses,
+            marries=entry.marries,
+            kills=entry.kills,
+            rounds_played=entry.rounds_played,
+            win_rate=entry.win_rate,
+        )
+        for index, entry in enumerate(top_rows)
+    ]
+    return LeaderboardResponse(
+        users=entries,
+        country_code=normalized_country,
+        country_name=country_name,
+        mode=normalized_mode,
+    )

@@ -5,25 +5,36 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { fetchCurrentLocation, fetchLeaderboard } from "@/lib/api";
+import { fetchCurrentUser, fetchLeaderboard } from "@/lib/api";
 import { readSession } from "@/lib/auth-session";
 import { ENABLE_API_BOTS } from "@/lib/feature-flags";
 import { ACTIVE_GAME_MODE_UPDATED_EVENT, readActiveGameMode, type GameMode } from "@/lib/game-mode";
 import { VIP_CELEBRITIES } from "@/lib/vip-data";
 import { getVIPStatForProfile, VIP_STATS_UPDATED_EVENT } from "@/lib/vip-stats";
-import type { LeaderboardEntry, LocationSelectionResponse } from "@/lib/types";
+import type { AuthUser, LeaderboardEntry } from "@/lib/types";
 
-function locationLeaderboardTitle(location: LocationSelectionResponse | null, mode: GameMode): string {
+function leaderboardModeLabel(mode: GameMode): string {
+  if (mode === "live") {
+    return "Live";
+  }
+  if (mode === "classic") {
+    return "Classic";
+  }
+  return "VIP";
+}
+
+function locationLeaderboardTitle(user: AuthUser | null, mode: GameMode): string {
   if (mode === "vip") {
     return "Top VIP Profiles - Global";
   }
-  if (!location) {
-    return "Top Profiles - Global";
+  const modeLabel = leaderboardModeLabel(mode);
+  const countryCode = (user?.country_code ?? "").trim().toUpperCase();
+  const countryName = (user?.country_name ?? "").trim();
+  if (!countryCode) {
+    return `National Ranking - ${modeLabel}`;
   }
-  if (location.country_code === "GL") {
-    return "Top Profiles - Global";
-  }
-  return `Top Profiles - ${location.country_name}`;
+  const countryLabel = countryName ? `${countryName} (${countryCode})` : countryCode;
+  return `National Ranking - ${modeLabel} - ${countryLabel}`;
 }
 
 function buildVipLeaderboardEntries(): LeaderboardEntry[] {
@@ -61,7 +72,7 @@ function buildVipLeaderboardEntries(): LeaderboardEntry[] {
 export default function LeaderboardPage() {
   const router = useRouter();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-  const [locationContext, setLocationContext] = useState<LocationSelectionResponse | null>(null);
+  const [leaderboardUser, setLeaderboardUser] = useState<AuthUser | null>(null);
   const [activeMode, setActiveMode] = useState<GameMode>("classic");
   const [hasMounted, setHasMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -118,18 +129,27 @@ export default function LeaderboardPage() {
             return;
           }
           setEntries(buildVipLeaderboardEntries());
-          setLocationContext(null);
+          setLeaderboardUser(null);
           return;
         }
 
-        const currentLocation = await fetchCurrentLocation(session.access_token);
-        const response = await fetchLeaderboard(session.access_token, currentLocation.country_code);
+        const currentUser = await fetchCurrentUser(session.access_token);
+        const leaderboardMode = mode === "live" ? "live" : "classic";
+        const response = await fetchLeaderboard(
+          session.access_token,
+          currentUser.country_code,
+          leaderboardMode
+        );
 
         if (cancelled) {
           return;
         }
         setEntries(response.users);
-        setLocationContext(currentLocation);
+        setLeaderboardUser({
+          ...currentUser,
+          country_code: response.country_code ?? currentUser.country_code,
+          country_name: response.country_name ?? currentUser.country_name,
+        });
       } catch (loadError) {
         if (cancelled) {
           return;
@@ -193,7 +213,7 @@ export default function LeaderboardPage() {
 
         <div className="space-y-3">
           <p className="rounded-xl bg-slate-900/70 px-3 py-2 text-sm text-cyan-100">
-            {locationLeaderboardTitle(locationContext, activeMode)}
+            {locationLeaderboardTitle(leaderboardUser, activeMode)}
           </p>
           {isLoading || !hasMounted
             ? Array.from({ length: 10 }).map((_, index) => (
@@ -248,7 +268,7 @@ export default function LeaderboardPage() {
               {activeMode === "vip"
                 ? "VIP leaderboard is temporarily unavailable."
                 : ENABLE_API_BOTS
-                  ? "No leaderboard activity yet for this location."
+                  ? "No national leaderboard activity yet for your country."
                   : "No real-player leaderboard activity yet. API bots are currently paused."}
             </article>
           )}

@@ -94,6 +94,7 @@ export type AuthUser = {
   email: string;
   name: string;
   country_code?: string | null;
+  country_name?: string | null;
   username?: string | null;
   gender: Gender;
   preferred_gender: PreferredGender;
@@ -159,4 +160,7 @@ export type LeaderboardEntry = {
 
 export type LeaderboardResponse = {
   users: LeaderboardEntry[];
+  country_code?: string | null;
+  country_name?: string | null;
+  mode?: string | null;
 };
