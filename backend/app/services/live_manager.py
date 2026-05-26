@@ -28,6 +28,9 @@ HARD_CUTOFF_SECONDS = (
 )
 COUNTRY_FALLBACK_WAIT_SECONDS = 8
 DISCONNECT_GRACE_SECONDS = 12
+LIVE_AD_ROUND_INTERVAL = 5
+LIVE_AD_DURATION_SECONDS = 15
+LIVE_AD_COUNTER_TTL_SECONDS = 60 * 60 * 24
 REDIS_ROOM_TTL_SECONDS = 3600
 REDIS_QUEUE_TTL_SECONDS = 3600
 
@@ -86,6 +89,10 @@ def _room_user_key(user_id: int) -> str:
     return f"live:room:user:{user_id}"
 
 
+def _live_ad_counter_key(user_id: int) -> str:
+    return f"live:ad_counter:user:{user_id}"
+
+
 def _datetime_to_json(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -135,6 +142,7 @@ class LiveRoom:
     phase: str = "MATCH_FOUND"
     started_at: datetime | None = None
     phase_ends_at: datetime | None = None
+    completed_rounds: int = 0
     decision_event: asyncio.Event = field(default_factory=asyncio.Event)
     phase_task: asyncio.Task[None] | None = None
 
@@ -208,6 +216,7 @@ def _room_to_dict(room: LiveRoom) -> dict[str, object]:
         "phase": room.phase,
         "started_at": _datetime_to_json(room.started_at),
         "phase_ends_at": _datetime_to_json(room.phase_ends_at),
+        "completed_rounds": room.completed_rounds,
     }
 
 
@@ -247,6 +256,10 @@ def _room_from_dict(data: object) -> LiveRoom | None:
         phase_ends_at=_datetime_from_json(
             data.get("phase_ends_at", data.get("phaseEndsAt")),
         ),
+        completed_rounds=max(
+            0,
+            int(data.get("completed_rounds", data.get("completedRounds", 0)) or 0),
+        ),
     )
 
 
@@ -261,6 +274,7 @@ class LiveConnectionManager:
         self._room_by_user_id: dict[int, str] = {}
         self._fallback_match_task: asyncio.Task[None] | None = None
         self._disconnect_grace_tasks: dict[int, asyncio.Task[None]] = {}
+        self._live_ad_round_counter_by_user_id: dict[int, int] = {}
         self._redis_deleted_room_ids: set[str] = set()
         self._redis_deleted_room_user_ids: set[int] = set()
         self._redis: Any | None = None
@@ -699,6 +713,8 @@ class LiveConnectionManager:
                         "type": "error",
                         "detail": "room_not_found",
                     }
+                elif room.phase == "AD_PHASE":
+                    return
                 elif room.judge_id != judge_user_id:
                     error_payload = {
                         "type": "error",
@@ -756,6 +772,8 @@ class LiveConnectionManager:
                         "type": "error",
                         "detail": "room_not_found",
                     }
+                elif room.phase == "AD_PHASE":
+                    return
                 elif room.judge_id != judge_user_id:
                     error_payload = {
                         "type": "error",
@@ -789,7 +807,7 @@ class LiveConnectionManager:
                 return
             room_loop = (
                 self._run_resumed_room_game_loop(room_id)
-                if room.phase in {"INTRO", "BATTLE", "JUDGMENT"}
+                if room.phase in {"INTRO", "BATTLE", "JUDGMENT", "AD_PHASE"}
                 else self._run_room_game_loop(room_id)
             )
             room.phase_task = asyncio.create_task(
@@ -924,6 +942,37 @@ class LiveConnectionManager:
                     room=room,
                     timeout_seconds=remaining_seconds,
                 )
+                return
+
+            if phase == "AD_PHASE":
+                if remaining_seconds > 0:
+                    await self._broadcast_to_room(
+                        room_id,
+                        {
+                            "type": "show_live_ad",
+                            "duration": remaining_seconds,
+                            "room_id": room_id,
+                            "roomId": room_id,
+                            "phase": "AD_PHASE",
+                        },
+                    )
+                    if not await self._sleep_if_room_active(room_id, remaining_seconds):
+                        return
+                await self._broadcast_to_room(
+                    room_id,
+                    {
+                        "type": "round_completed",
+                        "action": "round_completed",
+                        "reason": "ad_completed",
+                    },
+                )
+                notifications, room_ids_to_start = await self._close_room(
+                    room_id=room_id,
+                    reason="ad_completed",
+                    requeue_connected=True,
+                )
+                await self._fanout_notifications(notifications)
+                await self._start_room_loops(room_ids_to_start)
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -948,25 +997,20 @@ class LiveConnectionManager:
                 room.decision_event.wait(),
                 timeout=max(0, timeout_seconds),
             )
-            await self._broadcast_to_room(
-                room_id,
-                {
+            await self._complete_live_round(
+                room_id=room_id,
+                reason="round_completed",
+                completion_payload={
                     "type": "round_completed",
                     "action": "round_completed",
                     "reason": "judge_decision_received",
                 },
             )
-            notifications, room_ids_to_start = await self._close_room(
-                room_id=room_id,
-                reason="round_completed",
-                requeue_connected=True,
-            )
-            await self._fanout_notifications(notifications)
-            await self._start_room_loops(room_ids_to_start)
         except asyncio.TimeoutError:
-            await self._broadcast_to_room(
-                room_id,
-                {
+            await self._complete_live_round(
+                room_id=room_id,
+                reason="time_expired",
+                completion_payload={
                     "type": "force_skip",
                     "action": "force_skip",
                     "reason": "time_expired",
@@ -974,13 +1018,97 @@ class LiveConnectionManager:
                     "hardCutoffSeconds": HARD_CUTOFF_SECONDS,
                 },
             )
-            notifications, room_ids_to_start = await self._close_room(
-                room_id=room_id,
-                reason="time_expired",
-                requeue_connected=True,
-            )
-            await self._fanout_notifications(notifications)
-            await self._start_room_loops(room_ids_to_start)
+
+    async def _complete_live_round(
+        self,
+        *,
+        room_id: str,
+        reason: str,
+        completion_payload: dict[str, object],
+    ) -> None:
+        if await self._record_live_round_and_should_show_ad(room_id):
+            ad_completed = await self._run_live_ad_phase(room_id)
+            if not ad_completed:
+                return
+
+        await self._broadcast_to_room(room_id, completion_payload)
+        notifications, room_ids_to_start = await self._close_room(
+            room_id=room_id,
+            reason=reason,
+            requeue_connected=True,
+        )
+        await self._fanout_notifications(notifications)
+        await self._start_room_loops(room_ids_to_start)
+
+    async def _record_live_round_and_should_show_ad(self, room_id: str) -> bool:
+        async with self._state_lock:
+            room = self._rooms_by_id.get(room_id)
+            if room is None:
+                return False
+            room.completed_rounds += 1
+            participant_ids = list(room.participant_ids)
+
+        await self._persist_rooms_by_ids([room_id])
+
+        if not participant_ids:
+            return False
+
+        if self._redis is not None:
+            async def operation(redis_client: Any) -> bool:
+                keys = [_live_ad_counter_key(user_id) for user_id in participant_ids]
+                pipe = redis_client.pipeline()
+                for key in keys:
+                    pipe.incr(key)
+                    pipe.expire(key, LIVE_AD_COUNTER_TTL_SECONDS)
+                results = await pipe.execute()
+                counts = [
+                    int(results[index])
+                    for index in range(0, len(results), 2)
+                    if index < len(results)
+                ]
+                should_show_ad = any(count >= LIVE_AD_ROUND_INTERVAL for count in counts)
+                if should_show_ad:
+                    await redis_client.delete(*keys)
+                return should_show_ad
+
+            redis_result = await self._redis_call("record_live_ad_round", operation)
+            if isinstance(redis_result, bool):
+                return redis_result
+
+        async with self._state_lock:
+            should_show_ad = False
+            for participant_id in participant_ids:
+                next_count = self._live_ad_round_counter_by_user_id.get(participant_id, 0) + 1
+                self._live_ad_round_counter_by_user_id[participant_id] = next_count
+                if next_count >= LIVE_AD_ROUND_INTERVAL:
+                    should_show_ad = True
+
+            if should_show_ad:
+                for participant_id in participant_ids:
+                    self._live_ad_round_counter_by_user_id.pop(participant_id, None)
+
+            return should_show_ad
+
+    async def _run_live_ad_phase(self, room_id: str) -> bool:
+        room = await self._set_room_phase(
+            room_id=room_id,
+            phase="AD_PHASE",
+            duration=LIVE_AD_DURATION_SECONDS,
+        )
+        if room is None:
+            return False
+
+        await self._broadcast_to_room(
+            room_id,
+            {
+                "type": "show_live_ad",
+                "duration": LIVE_AD_DURATION_SECONDS,
+                "room_id": room_id,
+                "roomId": room_id,
+                "phase": "AD_PHASE",
+            },
+        )
+        return await self._sleep_if_room_active(room_id, LIVE_AD_DURATION_SECONDS)
 
     async def _set_room_phase(
         self,

@@ -15,7 +15,7 @@ type LiveModeRoundProps = {
 type LiveRole = "judge" | "contestant";
 type ConnectionStatus = "disconnected" | "connecting" | "connected";
 type LiveViewState = "lobby" | "searching" | "match";
-type LivePhase = "LOBBY" | "INTRO" | "BATTLE" | "JUDGMENT";
+type LivePhase = "LOBBY" | "INTRO" | "BATTLE" | "JUDGMENT" | "AD_PHASE";
 type LiveJudgeAction = "kiss" | "marry" | "kill";
 
 type WsPayload = Record<string, unknown> & {
@@ -55,6 +55,10 @@ const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 15000;
 const PHASE_TICK_INTERVAL_MS = 250;
 const MATCH_SEARCH_TIMEOUT_MS = 20000;
+const LIVE_WS_PING_INTERVAL_MS = 10000;
+const LIVE_AD_DEFAULT_DURATION_SECONDS = 15;
+const ADSENSE_CLIENT_ID = "ca-pub-1680175309169171";
+const ADSENSE_INTERSTITIAL_SLOT_ID = process.env.NEXT_PUBLIC_ADSENSE_INTERSTITIAL_SLOT_ID?.trim() ?? "";
 
 function reconnectDelayForAttempt(attempt: number): number {
   const exponentialDelay = RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt);
@@ -169,13 +173,20 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
   const [selectedTargetUserId, setSelectedTargetUserId] = useState<number | null>(null);
   const [eliminatedUserIds, setEliminatedUserIds] = useState<number[]>([]);
   const [fadeRoundOut, setFadeRoundOut] = useState(false);
+  const [isLiveAdVisible, setIsLiveAdVisible] = useState(false);
+  const [liveAdSecondsLeft, setLiveAdSecondsLeft] = useState(0);
+  const [liveAdInstance, setLiveAdInstance] = useState(0);
+  const [liveAdRenderError, setLiveAdRenderError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const pingIntervalRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const searchTimeoutRef = useRef<number | null>(null);
   const phaseEndAtRef = useRef<number | null>(null);
   const phaseTickerRef = useRef<number | null>(null);
+  const liveAdEndAtRef = useRef<number | null>(null);
+  const liveAdTickerRef = useRef<number | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionsRef = useRef<Record<number, RTCPeerConnection>>({});
   const pendingCandidatesRef = useRef<Record<number, RTCIceCandidateInit[]>>({});
@@ -201,6 +212,24 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
     roomIdRef.current = roomId;
   }, [roomId]);
 
+  useEffect(() => {
+    if (!isLiveAdVisible || !ADSENSE_INTERSTITIAL_SLOT_ID) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      try {
+        const adQueueHost = window as Window & { adsbygoogle?: Array<Record<string, unknown>> };
+        adQueueHost.adsbygoogle = adQueueHost.adsbygoogle ?? [];
+        adQueueHost.adsbygoogle.push({});
+      } catch {
+        setLiveAdRenderError("Ad failed to load. The live room will continue automatically.");
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isLiveAdVisible, liveAdInstance]);
+
   const sendSocketMessage = useCallback((payload: Record<string, unknown>) => {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -217,6 +246,62 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
     }
     phaseEndAtRef.current = null;
   }, []);
+
+  const stopSocketPing = useCallback(() => {
+    if (pingIntervalRef.current !== null) {
+      window.clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startSocketPing = useCallback(() => {
+    stopSocketPing();
+    pingIntervalRef.current = window.setInterval(() => {
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, LIVE_WS_PING_INTERVAL_MS);
+  }, [stopSocketPing]);
+
+  const clearLiveAdTicker = useCallback(() => {
+    if (liveAdTickerRef.current !== null) {
+      window.clearInterval(liveAdTickerRef.current);
+      liveAdTickerRef.current = null;
+    }
+    liveAdEndAtRef.current = null;
+  }, []);
+
+  const startLiveAd = useCallback(
+    (durationSeconds: number) => {
+      const safeDuration = Math.max(1, Math.trunc(durationSeconds || LIVE_AD_DEFAULT_DURATION_SECONDS));
+      clearLiveAdTicker();
+      clearPhaseTicker();
+      setPhase("AD_PHASE");
+      setPhaseSecondsLeft(safeDuration);
+      setLiveAdSecondsLeft(safeDuration);
+      setIsLiveAdVisible(true);
+      setLiveAdRenderError(null);
+      setLiveAdInstance((previous) => previous + 1);
+      setStatusMessage("Sponsored video break. Live room is paused.");
+
+      liveAdEndAtRef.current = Date.now() + safeDuration * 1000;
+      liveAdTickerRef.current = window.setInterval(() => {
+        const endAt = liveAdEndAtRef.current;
+        if (!endAt) {
+          return;
+        }
+        const remainingSeconds = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+        setLiveAdSecondsLeft(remainingSeconds);
+        setPhaseSecondsLeft(remainingSeconds);
+        if (remainingSeconds <= 0) {
+          clearLiveAdTicker();
+          setIsLiveAdVisible(false);
+        }
+      }, PHASE_TICK_INTERVAL_MS);
+    },
+    [clearLiveAdTicker, clearPhaseTicker]
+  );
 
   const stopLocalMedia = useCallback(() => {
     const stream = localStreamRef.current;
@@ -318,6 +403,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         reconnectAttemptRef.current = 0;
         setConnectionStatus("connected");
         setErrorMessage(null);
+        startSocketPing();
         const activeRoomId = roomIdRef.current;
         if (activeRoomId && viewStateRef.current === "match") {
           sendSocketMessage({
@@ -493,7 +579,9 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
             setViewState("match");
             setErrorMessage(null);
             setStatusMessage("Live room restored.");
-            if (incomingPhase === "INTRO" || incomingPhase === "BATTLE" || incomingPhase === "JUDGMENT") {
+            if (incomingPhase === "AD_PHASE") {
+              startLiveAd(incomingDuration || LIVE_AD_DEFAULT_DURATION_SECONDS);
+            } else if (incomingPhase === "INTRO" || incomingPhase === "BATTLE" || incomingPhase === "JUDGMENT") {
               setPhase(incomingPhase);
               setPhaseSecondsLeft(incomingDuration);
             }
@@ -515,7 +603,9 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
           if (messageType === "phase_change") {
             const incomingPhase = String(payload.phase ?? "").trim().toUpperCase();
             const incomingDuration = Math.max(0, Number.parseInt(String(payload.duration ?? "0"), 10));
-            if (incomingPhase === "INTRO" || incomingPhase === "BATTLE" || incomingPhase === "JUDGMENT") {
+            if (incomingPhase === "AD_PHASE") {
+              startLiveAd(incomingDuration || LIVE_AD_DEFAULT_DURATION_SECONDS);
+            } else if (incomingPhase === "INTRO" || incomingPhase === "BATTLE" || incomingPhase === "JUDGMENT") {
               setPhase(incomingPhase);
               setPhaseSecondsLeft(incomingDuration);
               if (incomingDuration > 0) {
@@ -533,6 +623,15 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
                 clearPhaseTicker();
               }
             }
+            return;
+          }
+
+          if (messageType === "show_live_ad") {
+            const incomingDuration = Math.max(
+              1,
+              Number.parseInt(String(payload.duration ?? LIVE_AD_DEFAULT_DURATION_SECONDS), 10)
+            );
+            startLiveAd(incomingDuration);
             return;
           }
 
@@ -717,6 +816,8 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
           }
 
           if (messageType === "force_skip" || messageType === "round_completed") {
+            clearLiveAdTicker();
+            setIsLiveAdVisible(false);
             setFadeRoundOut(true);
             setStatusMessage(
               messageType === "force_skip"
@@ -763,6 +864,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
           return;
         }
         wsRef.current = null;
+        stopSocketPing();
         const shouldReconnect = keepSearchingRef.current || viewStateRef.current === "match";
         if (shouldReconnect) {
           setConnectionStatus("connecting");
@@ -804,6 +906,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
       };
     },
     [
+      clearLiveAdTicker,
       clearPhaseTicker,
       clearSearchTimeout,
       closeAllPeerConnections,
@@ -813,7 +916,10 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
       resetRoundState,
       sendJoinQueue,
       sendSocketMessage,
+      startLiveAd,
+      startSocketPing,
       stopLocalMedia,
+      stopSocketPing,
       stopReconnectTimer,
     ]
   );
@@ -899,7 +1005,9 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
       reconnectAttemptRef.current = 0;
       clearSearchTimeout();
       stopReconnectTimer();
+      stopSocketPing();
       clearPhaseTicker();
+      clearLiveAdTicker();
       closeAllPeerConnections();
       stopLocalMedia();
       resetRoundState();
@@ -923,14 +1031,18 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         options?.closeSocket === false ? previousStatus : "disconnected"
       );
       setFadeRoundOut(false);
+      setIsLiveAdVisible(false);
+      setLiveAdSecondsLeft(0);
       safeSetStorageItem(LIVE_ACTIVITY_STORAGE_KEY, "0", "session");
     },
     [
+      clearLiveAdTicker,
       clearPhaseTicker,
       clearSearchTimeout,
       closeAllPeerConnections,
       resetRoundState,
       sendSocketMessage,
+      stopSocketPing,
       stopLocalMedia,
       stopReconnectTimer,
     ]
@@ -1066,6 +1178,7 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
   };
 
   return (
+    <>
     <section className="w-full space-y-4 rounded-[30px] border border-cyan-300/20 bg-[linear-gradient(175deg,rgba(2,12,34,0.93)_0%,rgba(2,8,22,0.96)_100%)] p-3.5 shadow-[0_30px_90px_rgba(1,4,12,0.82)] backdrop-blur-xl sm:p-4">
       <header className="rounded-3xl border border-cyan-300/20 bg-[#050f2a]/90 px-3 py-3 shadow-[inset_0_0_0_1px_rgba(50,120,190,0.35)]">
         <div className="flex items-center justify-between gap-2">
@@ -1192,6 +1305,9 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
             {phase === "JUDGMENT" ? (
               <p className="mt-1 text-lg font-extrabold text-amber-200">{phaseSecondsLeft}s</p>
             ) : null}
+            {phase === "AD_PHASE" ? (
+              <p className="mt-1 text-lg font-extrabold text-cyan-200">Ad break {liveAdSecondsLeft}s</p>
+            ) : null}
           </div>
 
           {introBigCountdown ? (
@@ -1229,5 +1345,52 @@ export function LiveModeRound({ currentUser, onBackToMenu }: LiveModeRoundProps)
         </div>
       ) : null}
     </section>
+
+      {isLiveAdVisible ? (
+        <div className="fixed inset-0 z-[180] flex items-center justify-center bg-[radial-gradient(80%_80%_at_50%_20%,rgba(34,211,238,0.22),transparent_65%),linear-gradient(180deg,rgba(2,6,23,0.97)_0%,rgba(3,8,28,0.99)_100%)] px-4 py-6">
+          <section className="w-full max-w-md rounded-3xl border border-cyan-300/30 bg-[#06142f]/95 p-4 shadow-[0_30px_90px_rgba(0,0,0,0.7)]">
+            <p className="text-center text-xs uppercase tracking-[0.22em] text-cyan-200/80">Live Sponsored Break</p>
+            <h3 className="mt-1 text-center text-xl font-bold text-white">Video Ad</h3>
+            <p className="mt-1 text-center text-sm text-slate-300">
+              The live room is paused for everyone. Gameplay resumes automatically.
+            </p>
+
+            <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-[linear-gradient(160deg,rgba(15,23,42,0.92)_0%,rgba(17,24,39,0.92)_100%)] p-3">
+              <div className="min-h-[220px] rounded-xl border border-cyan-300/25 bg-[#0b1535]/90 p-2">
+                {ADSENSE_INTERSTITIAL_SLOT_ID ? (
+                  <ins
+                    key={`live-interstitial-adsense-${liveAdInstance}`}
+                    className="adsbygoogle block h-full w-full"
+                    style={{ display: "block", minHeight: "220px" }}
+                    data-ad-client={ADSENSE_CLIENT_ID}
+                    data-ad-slot={ADSENSE_INTERSTITIAL_SLOT_ID}
+                    data-ad-format="auto"
+                    data-full-width-responsive="true"
+                  />
+                ) : (
+                  <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-cyan-300/35 bg-cyan-500/10 text-center">
+                    <p className="max-w-[260px] text-xs text-cyan-100">
+                      Configure NEXT_PUBLIC_ADSENSE_INTERSTITIAL_SLOT_ID to render the live interstitial video ad here.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {liveAdRenderError ? (
+              <p className="mt-3 rounded-xl border border-amber-300/40 bg-amber-500/15 px-3 py-2 text-xs text-amber-100">
+                {liveAdRenderError}
+              </p>
+            ) : null}
+
+            <div className="mt-4 rounded-2xl border border-cyan-300/25 bg-cyan-500/10 px-3 py-3 text-center">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-100/75">Resuming in</p>
+              <p className="mt-1 text-4xl font-black text-white">{liveAdSecondsLeft}s</p>
+              <p className="mt-1 text-xs text-slate-300">Close is disabled during synchronized Live ads.</p>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 }

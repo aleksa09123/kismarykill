@@ -774,8 +774,8 @@ export function GameRound({
             className="w-full max-w-md rounded-3xl border border-blue-300/25 bg-[#060f2d]/95 p-4 shadow-[0_30px_90px_rgba(0,0,0,0.65)]"
           >
             <p className="text-center text-xs uppercase tracking-[0.2em] text-cyan-200/80">Sponsored Break</p>
-            <h3 className="mt-1 text-center text-xl font-bold text-white">Interstitial Ad</h3>
-            <p className="mt-1 text-center text-sm text-slate-300">Thanks for playing. Your next round will resume after this ad.</p>
+            <h3 className="mt-1 text-center text-xl font-bold text-white">Video Ad</h3>
+            <p className="mt-1 text-center text-sm text-slate-300">Thanks for playing. Your next round will resume after this video ad.</p>
 
             <div className="mt-4 rounded-2xl border border-blue-300/20 bg-[linear-gradient(160deg,rgba(15,23,42,0.92)_0%,rgba(17,24,39,0.92)_100%)] p-3">
               <div className="min-h-[220px] rounded-xl border border-blue-300/25 bg-[#0b1535]/90 p-2">
@@ -792,7 +792,7 @@ export function GameRound({
                 ) : (
                   <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-amber-300/40 bg-amber-500/10 text-center">
                     <p className="max-w-[260px] text-xs text-amber-100">
-                      Configure NEXT_PUBLIC_ADSENSE_INTERSTITIAL_SLOT_ID to render interstitial AdSense creatives here.
+                      Configure NEXT_PUBLIC_ADSENSE_INTERSTITIAL_SLOT_ID to render interstitial video ad creatives here.
                     </p>
                   </div>
                 )}
