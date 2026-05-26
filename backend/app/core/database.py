@@ -98,18 +98,55 @@ def _ensure_runtime_columns(sync_conn: object) -> None:
     existing_columns = {
         column["name"] for column in inspector.get_columns("users", schema=users_schema)
     }
-    if "is_premium" in existing_columns:
+    bind = inspector.bind
+    if bind is None:
         return
+
+    def add_column_if_missing(column_name: str, sqlite_definition: str, postgres_definition: str) -> None:
+        if column_name in existing_columns:
+            return
+        if dialect_name == "sqlite":
+            bind.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {column_name} {sqlite_definition}")
+            return
+        bind.exec_driver_sql(
+            f"ALTER TABLE public.users ADD COLUMN IF NOT EXISTS {column_name} {postgres_definition}"
+        )
 
     if dialect_name == "sqlite":
-        inspector.bind.exec_driver_sql(
-            "ALTER TABLE users ADD COLUMN is_premium BOOLEAN NOT NULL DEFAULT 0"
-        )
+        add_column_if_missing("email", "VARCHAR(255)", "VARCHAR(255)")
+        add_column_if_missing("password_hash", "VARCHAR(255)", "VARCHAR(255)")
+        add_column_if_missing("gender", "VARCHAR(16)", "VARCHAR(16)")
+        add_column_if_missing("preferred_gender", "VARCHAR(16) DEFAULT 'both'", "VARCHAR(16) DEFAULT 'both'")
+        add_column_if_missing("profile_image_url", "VARCHAR(500)", "VARCHAR(500)")
+        add_column_if_missing("age", "INTEGER", "INTEGER")
+        add_column_if_missing("country_code", "VARCHAR(2)", "VARCHAR(2)")
+        add_column_if_missing("country_name", "VARCHAR(80)", "VARCHAR(80)")
+        add_column_if_missing("latitude", "FLOAT", "DOUBLE PRECISION")
+        add_column_if_missing("longitude", "FLOAT", "DOUBLE PRECISION")
+        add_column_if_missing("otp_verified", "BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE")
+        add_column_if_missing("face_verified", "BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE")
+        add_column_if_missing("is_premium", "BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE")
+        add_column_if_missing("is_bot", "BOOLEAN NOT NULL DEFAULT 0", "BOOLEAN NOT NULL DEFAULT FALSE")
+        add_column_if_missing("swipe_blocked_until", "DATETIME", "TIMESTAMPTZ")
+        add_column_if_missing("koordinati", "VARCHAR(64)", "VARCHAR(64)")
         return
 
-    inspector.bind.exec_driver_sql(
-        "ALTER TABLE users ADD COLUMN is_premium BOOLEAN NOT NULL DEFAULT FALSE"
-    )
+    add_column_if_missing("email", "VARCHAR(255)", "VARCHAR(255)")
+    add_column_if_missing("password_hash", "VARCHAR(255)", "VARCHAR(255)")
+    add_column_if_missing("gender", "VARCHAR(16)", "VARCHAR(16)")
+    add_column_if_missing("preferred_gender", "VARCHAR(16) DEFAULT 'both'", "VARCHAR(16) DEFAULT 'both'")
+    add_column_if_missing("profile_image_url", "VARCHAR(500)", "VARCHAR(500)")
+    add_column_if_missing("age", "INTEGER", "INTEGER")
+    add_column_if_missing("country_code", "VARCHAR(2)", "VARCHAR(2)")
+    add_column_if_missing("country_name", "VARCHAR(80)", "VARCHAR(80)")
+    add_column_if_missing("latitude", "FLOAT", "DOUBLE PRECISION")
+    add_column_if_missing("longitude", "FLOAT", "DOUBLE PRECISION")
+    add_column_if_missing("otp_verified", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT FALSE")
+    add_column_if_missing("face_verified", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT FALSE")
+    add_column_if_missing("is_premium", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT FALSE")
+    add_column_if_missing("is_bot", "BOOLEAN NOT NULL DEFAULT FALSE", "BOOLEAN NOT NULL DEFAULT FALSE")
+    add_column_if_missing("swipe_blocked_until", "TIMESTAMPTZ", "TIMESTAMPTZ")
+    add_column_if_missing("koordinati", "VARCHAR(64)", "VARCHAR(64)")
 
 
 def _ensure_countries_table(sync_conn: object) -> None:

@@ -153,20 +153,34 @@ async def _sync_local_user_from_supabase_row(
         )
         session.add(local_user)
     else:
-        local_user.ime = name
-        local_user.slika_url = profile_image_url
-        local_user.pol = gender_enum
+        # Keep existing Postgres profile data authoritative; Supabase rows are only
+        # a hydration fallback and can lag behind local profile edits.
+        if not local_user.ime:
+            local_user.ime = name
+        if not local_user.slika_url and profile_image_url:
+            local_user.slika_url = profile_image_url
+        if not local_user.profile_image_url and profile_image_url:
+            local_user.profile_image_url = profile_image_url
+        if local_user.pol is None:
+            local_user.pol = gender_enum
         local_user.email = email or None
-        local_user.password_hash = _password_hash_from_row(user_row)
-        local_user.gender = gender
-        local_user.preferred_gender = preferred_gender
-        local_user.country_code = str(user_row.get("country_code")).upper() if user_row.get("country_code") else None
-        local_user.country_name = str(user_row.get("country_name") or "").strip() or None
-        local_user.profile_image_url = profile_image_url
-        local_user.otp_verified = otp_verified
-        local_user.face_verified = face_verified
-        local_user.is_premium = is_premium
-        local_user.is_bot = _normalize_boolean(user_row.get("is_bot"), default=False)
+        password_hash = _password_hash_from_row(user_row)
+        if password_hash:
+            local_user.password_hash = password_hash
+        if not local_user.gender:
+            local_user.gender = gender
+        if not local_user.preferred_gender:
+            local_user.preferred_gender = preferred_gender
+        if not local_user.country_code and user_row.get("country_code"):
+            local_user.country_code = str(user_row.get("country_code")).upper()
+        if not local_user.country_name and user_row.get("country_name"):
+            local_user.country_name = str(user_row.get("country_name") or "").strip() or None
+        local_user.otp_verified = bool(local_user.otp_verified or otp_verified)
+        local_user.face_verified = bool(local_user.face_verified or face_verified)
+        local_user.is_premium = bool(local_user.is_premium or is_premium)
+        local_user.is_bot = bool(
+            local_user.is_bot or _normalize_boolean(user_row.get("is_bot"), default=False)
+        )
 
     await session.commit()
     await session.refresh(local_user)

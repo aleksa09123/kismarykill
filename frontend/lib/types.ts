@@ -93,9 +93,9 @@ export type AuthUser = {
   id: number;
   email: string;
   name: string;
+  username?: string | null;
   country_code?: string | null;
   country_name?: string | null;
-  username?: string | null;
   gender: Gender;
   preferred_gender: PreferredGender;
   profile_image_url?: string | null;
@@ -160,6 +160,7 @@ export type LeaderboardEntry = {
 
 export type LeaderboardResponse = {
   users: LeaderboardEntry[];
+  current_user_rank?: LeaderboardEntry | null;
   country_code?: string | null;
   country_name?: string | null;
   mode?: string | null;

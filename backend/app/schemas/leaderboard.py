@@ -18,6 +18,7 @@ class LeaderboardEntry(BaseModel):
 
 class LeaderboardResponse(BaseModel):
     users: list[LeaderboardEntry]
+    current_user_rank: LeaderboardEntry | None = None
     country_code: str | None = None
     country_name: str | None = None
     mode: str | None = None

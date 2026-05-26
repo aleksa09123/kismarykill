@@ -187,7 +187,9 @@ def _serialize_supabase_user(user_row: dict[str, object], rounds_played: int = 0
         id=int(user_row["id"]),
         email=email,
         name=display_name,
+        username=display_name,
         country_code=str(user_row.get("country_code")).upper() if user_row.get("country_code") else None,
+        country_name=str(user_row.get("country_name") or "").strip() or None,
         gender=normalized_gender,  # type: ignore[arg-type]
         preferred_gender=normalized_preference,  # type: ignore[arg-type]
         profile_image_url=(
@@ -211,6 +213,41 @@ def _get_supabase_user_by_email(client: Client, email: str) -> dict[str, object]
         .execute()
     )
     return _extract_supabase_row(response)
+
+
+def _best_effort_update_supabase_user(
+    *,
+    request: Request,
+    user_id: int,
+    payload: dict[str, object | None],
+) -> None:
+    client = getattr(request.app.state, "supabase", None)
+    if client is None:
+        return
+
+    rich_payload = {
+        key: value
+        for key, value in payload.items()
+        if value is not None
+    }
+    if not rich_payload:
+        return
+
+    fallback_payload = {
+        key: value
+        for key, value in rich_payload.items()
+        if key in {"ime", "slika_url", "country_code", "password_hash"}
+    }
+    for candidate in (rich_payload, fallback_payload):
+        if not candidate:
+            continue
+        try:
+            client.table("users").update(candidate).eq("id", user_id).execute()
+            return
+        except Exception as exc:
+            if not _is_supabase_missing_column_error(exc):
+                logger.warning("Best-effort Supabase profile sync failed for user %s: %s", user_id, exc)
+                return
 
 
 def _gender_enum_from_row(user_row: dict[str, object]) -> Gender:
@@ -270,19 +307,30 @@ async def _sync_local_user_from_supabase(
         )
         session.add(local_user)
     else:
-        local_user.ime = ime
-        local_user.slika_url = profile_image_url
-        local_user.pol = gender_enum
+        # Local Postgres is the runtime source of truth for editable profile fields.
+        # Supabase can be stale after an upload/name change, so only hydrate blanks.
+        if not local_user.ime:
+            local_user.ime = ime
+        if not local_user.slika_url and profile_image_url:
+            local_user.slika_url = profile_image_url
+        if not local_user.profile_image_url and profile_image_url:
+            local_user.profile_image_url = profile_image_url
+        if local_user.pol is None:
+            local_user.pol = gender_enum
         local_user.email = email
-        local_user.password_hash = password_hash
-        local_user.gender = gender_enum.value
-        local_user.preferred_gender = preferred_gender
-        local_user.country_code = str(user_row.get("country_code")).upper() if user_row.get("country_code") else None
-        local_user.country_name = str(user_row.get("country_name") or "").strip() or None
-        local_user.profile_image_url = profile_image_url
-        local_user.otp_verified = otp_verified
-        local_user.face_verified = face_verified
-        local_user.is_premium = is_premium
+        if password_hash:
+            local_user.password_hash = password_hash
+        if not local_user.gender:
+            local_user.gender = gender_enum.value
+        if not local_user.preferred_gender:
+            local_user.preferred_gender = preferred_gender
+        if not local_user.country_code and user_row.get("country_code"):
+            local_user.country_code = str(user_row.get("country_code")).upper()
+        if not local_user.country_name and user_row.get("country_name"):
+            local_user.country_name = str(user_row.get("country_name") or "").strip() or None
+        local_user.otp_verified = bool(local_user.otp_verified or otp_verified)
+        local_user.face_verified = bool(local_user.face_verified or face_verified)
+        local_user.is_premium = bool(local_user.is_premium or is_premium)
 
     await session.commit()
     await session.refresh(local_user)
@@ -299,7 +347,9 @@ def _serialize_user(user: User, rounds_played: int = 0) -> AuthUser:
         id=user.id,
         email=user.email or "",
         name=user.ime,
+        username=user.ime,
         country_code=user.country_code.upper() if user.country_code else None,
+        country_name=user.country_name,
         gender=normalized_gender,  # type: ignore[arg-type]
         preferred_gender=normalized_preference,  # type: ignore[arg-type]
         profile_image_url=user.profile_image_url or user.slika_url,
@@ -457,13 +507,13 @@ async def verify_registration(
         raise HTTPException(status_code=500, detail="Supabase did not return registered user")
 
     try:
-        await _sync_local_user_from_supabase(session, created_user)
+        orm_user = await _sync_local_user_from_supabase(session, created_user)
     except Exception as exc:
         await session.rollback()
         raise HTTPException(status_code=500, detail="Could not sync local user profile") from exc
 
     token = create_access_token(int(created_user["id"]))
-    return AuthResponse(access_token=token, user=_serialize_supabase_user(created_user, rounds_played=0))
+    return AuthResponse(access_token=token, user=_serialize_user(orm_user, rounds_played=0))
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -503,11 +553,14 @@ async def login(
 
     return AuthResponse(
         access_token=token,
-        user=_serialize_supabase_user(user_row, rounds_played=rounds_played),
+        user=_serialize_user(orm_user, rounds_played=rounds_played),
     )
 
 
 @router.get("/me", response_model=AuthUser)
+@router.get("/api/me", response_model=AuthUser, include_in_schema=False)
+@router.get("/users/me", response_model=AuthUser, include_in_schema=False)
+@router.get("/api/users/me", response_model=AuthUser, include_in_schema=False)
 async def get_me(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
@@ -517,7 +570,11 @@ async def get_me(
 
 
 @router.patch("/me", response_model=AuthUser)
+@router.patch("/api/me", response_model=AuthUser, include_in_schema=False)
+@router.patch("/users/me", response_model=AuthUser, include_in_schema=False)
+@router.patch("/api/users/me", response_model=AuthUser, include_in_schema=False)
 async def update_me(
+    request: Request,
     payload: UpdateProfileRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
@@ -539,12 +596,26 @@ async def update_me(
 
     await session.commit()
     await session.refresh(current_user)
+    _best_effort_update_supabase_user(
+        request=request,
+        user_id=current_user.id,
+        payload={
+            "ime": current_user.ime,
+            "name": current_user.ime,
+            "country_code": current_user.country_code,
+            "country_name": current_user.country_name,
+            "gender": current_user.gender,
+            "preferred_gender": current_user.preferred_gender,
+            "pol": current_user.pol.value if current_user.pol else None,
+        },
+    )
 
     rounds_played = await _rounds_played(session, current_user.id)
     return _serialize_user(current_user, rounds_played=rounds_played)
 
 
 @router.post("/upload-profile-picture", response_model=AuthUser)
+@router.post("/api/upload-profile-picture", response_model=AuthUser, include_in_schema=False)
 async def upload_profile_picture(
     request: Request,
     file: UploadFile = File(...),
@@ -584,6 +655,16 @@ async def upload_profile_picture(
 
         await session.commit()
         await session.refresh(current_user)
+        _best_effort_update_supabase_user(
+            request=request,
+            user_id=current_user.id,
+            payload={
+                "ime": current_user.ime,
+                "slika_url": profile_image_url,
+                "profile_image_url": profile_image_url,
+                "face_verified": True,
+            },
+        )
         rounds_played = await _rounds_played(session, current_user.id)
         return _serialize_user(current_user, rounds_played=rounds_played)
     finally:

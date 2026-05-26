@@ -50,6 +50,7 @@ function normalizeAuthUser(value: unknown): AuthUser | null {
     id,
     email,
     name,
+    username: normalizeString(raw.username) || name,
     country_code: countryCode || null,
     country_name: countryName || null,
     gender: normalizeGender(raw.gender ?? raw.pol),

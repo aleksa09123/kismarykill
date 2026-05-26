@@ -50,7 +50,9 @@ class AuthUser(BaseModel):
     id: int
     email: str
     name: str
+    username: str | None = None
     country_code: str | None = None
+    country_name: str | None = None
     gender: GenderValue
     preferred_gender: PreferredGenderValue
     profile_image_url: str | None = None

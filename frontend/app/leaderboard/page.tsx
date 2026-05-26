@@ -110,6 +110,7 @@ function buildVipLeaderboardEntries(): LeaderboardEntry[] {
 export default function LeaderboardPage() {
   const router = useRouter();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [currentUserRank, setCurrentUserRank] = useState<LeaderboardEntry | null>(null);
   const [leaderboardUser, setLeaderboardUser] = useState<AuthUser | null>(null);
   const [leaderboardLocation, setLeaderboardLocation] = useState<LocationSelectionResponse | null>(null);
   const [activeMode, setActiveMode] = useState<GameMode>("classic");
@@ -168,6 +169,7 @@ export default function LeaderboardPage() {
             return;
           }
           setEntries(buildVipLeaderboardEntries());
+          setCurrentUserRank(null);
           setLeaderboardUser(null);
           return;
         }
@@ -201,6 +203,7 @@ export default function LeaderboardPage() {
         }
         const resolvedLocation = resolveLeaderboardLocation(response, activeLocation, currentUser);
         setEntries(response.users);
+        setCurrentUserRank(response.current_user_rank ?? null);
         setLeaderboardLocation(resolvedLocation);
         setLeaderboardUser({
           ...currentUser,
@@ -233,6 +236,7 @@ export default function LeaderboardPage() {
 
     const refreshVipEntries = () => {
       setEntries(buildVipLeaderboardEntries());
+      setCurrentUserRank(null);
       setIsLoading(false);
     };
 
@@ -320,6 +324,34 @@ export default function LeaderboardPage() {
                   </div>
                 </article>
               ))}
+          {!isLoading && currentUserRank ? (
+            <article className="sticky bottom-3 z-20 flex items-center gap-3 rounded-2xl border border-cyan-200/70 bg-cyan-400/20 px-3 py-3 shadow-2xl shadow-cyan-950/50 backdrop-blur-xl">
+              <p className="w-7 text-center text-lg font-black text-cyan-50">#{currentUserRank.rank}</p>
+              <div className="relative h-14 w-14 overflow-hidden rounded-full border border-cyan-100/70 bg-slate-900">
+                {currentUserRank.profile_image_url ? (
+                  <Image
+                    src={currentUserRank.profile_image_url}
+                    alt={currentUserRank.name}
+                    unoptimized
+                    fill
+                    sizes="56px"
+                    className="object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-slate-800 text-slate-200">
+                    {currentUserRank.name.slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-bold uppercase tracking-[0.28em] text-cyan-100">Me</p>
+                <p className="truncate font-semibold text-white">{currentUserRank.name}</p>
+                <p className="text-xs text-cyan-50">
+                  {currentUserRank.score} points | Rounds {currentUserRank.rounds_played} | Win {currentUserRank.win_rate.toFixed(1)}%
+                </p>
+              </div>
+            </article>
+          ) : null}
           {!isLoading && entries.length === 0 && (
             <article className="rounded-2xl border border-slate-700/60 bg-slate-900/60 px-3 py-4 text-sm text-slate-200">
               {activeMode === "vip"

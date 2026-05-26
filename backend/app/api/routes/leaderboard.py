@@ -15,6 +15,7 @@ from app.schemas.leaderboard import LeaderboardEntry, LeaderboardResponse
 from app.services.bot_simulation import ENABLE_API_BOTS, LOCAL_AI_BOT_TARGET_COUNT, BotSimulationService
 
 router = APIRouter(tags=["leaderboard"])
+LEADERBOARD_LIMIT = 20
 
 
 def _synthetic_local_stats(*, bot_id: int, country_code: str) -> tuple[int, int, int, int, float]:
@@ -63,7 +64,13 @@ async def get_leaderboard(
     )
 
     if normalized_country is None:
-        return LeaderboardResponse(users=[], country_code=None, country_name=None, mode=normalized_mode)
+        return LeaderboardResponse(
+            users=[],
+            current_user_rank=None,
+            country_code=None,
+            country_name=None,
+            mode=normalized_mode,
+        )
 
     synthetic_bot_rows: list[LeaderboardEntry] = []
 
@@ -137,7 +144,6 @@ async def get_leaderboard(
             func.coalesce(kisses_expr, zero).desc(),
             User.id.asc(),
         )
-        .limit(100)
     )
     stmt = stmt.where(User.country_code == normalized_country)
     stmt = stmt.where(User.is_bot.is_(False))
@@ -165,12 +171,12 @@ async def get_leaderboard(
         )
         for row in rows
     ]
-    top_rows = sorted(
+    ranked_rows = sorted(
         [*real_entries, *synthetic_bot_rows],
-        key=lambda entry: (entry.score, entry.rounds_played, entry.win_rate),
+        key=lambda entry: (entry.score, entry.rounds_played, entry.win_rate, -entry.user_id),
         reverse=True,
-    )[:100]
-    entries = [
+    )
+    ranked_entries = [
         LeaderboardEntry(
             rank=index + 1,
             user_id=entry.user_id,
@@ -183,10 +189,15 @@ async def get_leaderboard(
             rounds_played=entry.rounds_played,
             win_rate=entry.win_rate,
         )
-        for index, entry in enumerate(top_rows)
+        for index, entry in enumerate(ranked_rows)
     ]
+    current_user_rank = next(
+        (entry for entry in ranked_entries if entry.user_id == current_user.id),
+        None,
+    )
     return LeaderboardResponse(
-        users=entries,
+        users=ranked_entries[:LEADERBOARD_LIMIT],
+        current_user_rank=current_user_rank,
         country_code=normalized_country,
         country_name=country_name,
         mode=normalized_mode,
