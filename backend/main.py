@@ -24,7 +24,7 @@ APP_VERSION = (
 )
 
 from app.api.routes.auth import router as auth_router
-from app.api.routes.blind_mode import router as blind_mode_router
+from app.api.routes.blind_mode import blind_mode_connection_manager, router as blind_mode_router
 from app.api.routes.leaderboard import router as leaderboard_router
 from app.api.routes.location import router as location_router
 from app.api.routes.rounds import router as rounds_router
@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await blind_mode_connection_manager.close()
         await live_connection_manager.close()
         _close_supabase_client(
             supabase_client=supabase_client,
@@ -133,7 +134,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Blind-Round-Token"],
     allow_private_network=True,
 )
 

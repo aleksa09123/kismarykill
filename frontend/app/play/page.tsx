@@ -147,6 +147,7 @@ export default function PlayPage() {
         ) : mode === "blind" ? (
           <BlindModeRound
             accessToken={session.access_token}
+            currentUser={user}
             onBackToMenu={() => router.push("/dashboard")}
             onRoundSubmitted={handleBlindRoundSubmitted}
           />

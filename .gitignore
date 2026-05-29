@@ -13,5 +13,6 @@ __pycache__/
 .env*
 
 backend/.pytest_cache/
+backend/.server-logs/
 
 backend/.pytest_cache/
