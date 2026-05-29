@@ -63,6 +63,24 @@ function readInitialSessionClient(): AuthResponse | null {
   return readSession();
 }
 
+function parseAdminEmails(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function isAdminEmail(email: string | null | undefined): boolean {
+  const normalizedEmail = email?.trim().toLowerCase();
+  if (!normalizedEmail) {
+    return false;
+  }
+
+  return parseAdminEmails(process.env.NEXT_PUBLIC_ADMIN_EMAILS).has(normalizedEmail);
+}
+
 function GlobeIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
@@ -136,6 +154,20 @@ function SettingsIcon({ className = "h-5 w-5" }: IconProps) {
         strokeWidth="1.3"
       />
       <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function ShieldIcon({ className = "h-5 w-5" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <path
+        d="M12 3.5 5.2 6.1v5.1c0 4.4 2.8 8.2 6.8 9.3 4-1.1 6.8-4.9 6.8-9.3V6.1L12 3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path d="m9.2 12 1.8 1.8 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -511,6 +543,7 @@ export default function DashboardPage() {
   const hasReferralUnlock = referralCount >= referralTarget;
   const isPremiumUser = Boolean(user?.is_premium);
   const shouldShowPaywall = user !== null && !isPremiumUser && !hasReferralUnlock;
+  const shouldShowAdminPanel = useMemo(() => isAdminEmail(user?.email), [user?.email]);
   const inviteRef = user?.id ?? user?.username?.trim() ?? "";
   const referralLink = isMounted && inviteRef
     ? `${window.location.origin}/register?ref=${encodeURIComponent(String(inviteRef))}`
@@ -1089,6 +1122,18 @@ export default function DashboardPage() {
             <span className="flex-1">Settings</span>
             <ChevronRightIcon className="h-5 w-5 text-slate-400" />
           </Link>
+          {shouldShowAdminPanel && (
+            <Link
+              href="/admin/dashboard"
+              className="flex h-[52px] w-full max-w-full touch-manipulation items-center rounded-2xl border border-cyan-300/25 bg-[linear-gradient(92deg,rgba(6,23,55,0.92)_0%,rgba(8,34,67,0.9)_100%)] px-3.5 py-3 text-sm font-semibold uppercase tracking-wide text-cyan-100 shadow-[inset_0_1px_0_rgba(180,220,255,0.08),0_0_20px_rgba(34,211,238,0.08)] transition-colors duration-200 active:bg-[#0a234a] motion-reduce:transition-none"
+            >
+              <span className="mr-3 flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-300/25 bg-cyan-500/15 text-cyan-200">
+                <ShieldIcon className="h-[18px] w-[18px]" />
+              </span>
+              <span className="flex-1">Admin Panel</span>
+              <ChevronRightIcon className="h-5 w-5 text-cyan-200/70" />
+            </Link>
+          )}
         </div>
 
         <div className="flex items-center gap-3 rounded-2xl border border-blue-300/15 bg-[#041632]/80 px-3 py-3">
