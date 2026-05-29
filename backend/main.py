@@ -24,6 +24,7 @@ APP_VERSION = (
 )
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.blind_mode import router as blind_mode_router
 from app.api.routes.leaderboard import router as leaderboard_router
 from app.api.routes.location import router as location_router
 from app.api.routes.rounds import router as rounds_router
@@ -132,18 +133,21 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Blind-Round-Token"],
     allow_private_network=True,
 )
 
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 app.include_router(auth_router)
+app.include_router(blind_mode_router)
 app.include_router(leaderboard_router)
 app.include_router(location_router)
 app.include_router(rounds_router)
 app.include_router(votes_router)
 
 # Backward-compatible aliases for deployments/frontends that call API endpoints with `/api` prefix.
+app.include_router(blind_mode_router, prefix="/api", include_in_schema=False)
 app.include_router(leaderboard_router, prefix="/api", include_in_schema=False)
 app.include_router(location_router, prefix="/api", include_in_schema=False)
 app.include_router(rounds_router, prefix="/api", include_in_schema=False)

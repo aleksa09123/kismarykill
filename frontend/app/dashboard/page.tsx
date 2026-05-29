@@ -192,6 +192,20 @@ function CrownIcon({ className = "h-3.5 w-3.5" }: IconProps) {
   );
 }
 
+function BlindModeIcon({ className = "h-3.5 w-3.5" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <path
+        d="M4.5 8.7c4.9-2.1 10.1-2.1 15 0v3.2c0 3.1-2.4 5.6-5.4 5.6-1.1 0-1.9-.3-2.1-.3s-1 .3-2.1.3c-3 0-5.4-2.5-5.4-5.6V8.7Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M8 12.2h3M13 12.2h3M9 15c1 .8 2 .8 3 0 1 .8 2 .8 3 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function LiveSignalIcon({ className = "h-3.5 w-3.5" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
@@ -200,6 +214,19 @@ function LiveSignalIcon({ className = "h-3.5 w-3.5" }: IconProps) {
       <path d="M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
+}
+
+function gameModeLabel(mode: GameMode): string {
+  if (mode === "vip") {
+    return "VIP Edition";
+  }
+  if (mode === "blind") {
+    return "Blind Mode";
+  }
+  if (mode === "live") {
+    return "Live Mode";
+  }
+  return "Classic";
 }
 
 function RingsIcon({ className = "h-14 w-14" }: IconProps) {
@@ -713,10 +740,11 @@ export default function DashboardPage() {
     await syncLocationAndRefreshContext(selectedCountryCode, false);
   };
 
-  const startPlay = async () => {
+  const startPlay = async (modeOverride?: GameMode) => {
     if (!session || playLocked) {
       return;
     }
+    const modeForPlay = modeOverride ?? selectedMode;
 
     const locationForPlay: LocationSelectionResponse = {
       country_code: selectorCountryCode,
@@ -745,11 +773,11 @@ export default function DashboardPage() {
     }
 
     const params = new URLSearchParams({
-      mode: selectedMode,
+      mode: modeForPlay,
       country_code: locationForPlay.country_code,
       country_name: locationForPlay.country_name
     });
-    writeActiveGameMode(selectedMode);
+    writeActiveGameMode(modeForPlay);
     router.push(`/play?${params.toString()}`);
   };
 
@@ -769,6 +797,58 @@ export default function DashboardPage() {
       </>
     );
   };
+
+  const modeCards: Array<{
+    mode: GameMode;
+    title: string;
+    eyebrow: string;
+    description: string;
+    Icon: (props: IconProps) => JSX.Element;
+    selectedClassName: string;
+    idleClassName: string;
+    iconClassName: string;
+  }> = [
+    {
+      mode: "classic",
+      title: "Classic",
+      eyebrow: "Original",
+      description: "Three profiles, one clean KMK call.",
+      Icon: GamepadIcon,
+      selectedClassName: "border-cyan-200/60 bg-gradient-to-br from-cyan-500/30 via-blue-500/25 to-indigo-500/35 text-cyan-50 shadow-[0_16px_34px_rgba(34,211,238,0.22)]",
+      idleClassName: "border-cyan-200/20 bg-gradient-to-br from-slate-900/85 via-blue-950/65 to-cyan-950/70 text-slate-100",
+      iconClassName: "text-cyan-100",
+    },
+    {
+      mode: "vip",
+      title: "VIP",
+      eyebrow: "Celebrity",
+      description: "Famous faces, global scoreboard energy.",
+      Icon: CrownIcon,
+      selectedClassName: "border-fuchsia-200/60 bg-gradient-to-br from-fuchsia-500/35 via-pink-500/25 to-amber-400/35 text-fuchsia-50 shadow-[0_16px_34px_rgba(217,70,239,0.22)]",
+      idleClassName: "border-fuchsia-200/20 bg-gradient-to-br from-slate-950/85 via-fuchsia-950/65 to-rose-950/60 text-slate-100",
+      iconClassName: "text-fuchsia-100",
+    },
+    {
+      mode: "blind",
+      title: "Blind",
+      eyebrow: "Anonymous",
+      description: "Judge the vibe before the reveal.",
+      Icon: BlindModeIcon,
+      selectedClassName: "border-violet-100/70 bg-gradient-to-br from-violet-500/35 via-cyan-500/25 to-lime-400/35 text-violet-50 shadow-[0_16px_34px_rgba(124,58,237,0.24)]",
+      idleClassName: "border-violet-200/20 bg-gradient-to-br from-slate-950/85 via-violet-950/60 to-cyan-950/65 text-slate-100",
+      iconClassName: "text-violet-100",
+    },
+    {
+      mode: "live",
+      title: "Live",
+      eyebrow: "Real Time",
+      description: "Queue into a live room and react fast.",
+      Icon: LiveSignalIcon,
+      selectedClassName: "border-emerald-200/60 bg-gradient-to-br from-emerald-500/35 via-teal-500/25 to-sky-400/35 text-emerald-50 shadow-[0_16px_34px_rgba(16,185,129,0.22)]",
+      idleClassName: "border-emerald-200/20 bg-gradient-to-br from-slate-950/85 via-emerald-950/60 to-sky-950/65 text-slate-100",
+      iconClassName: "text-emerald-100",
+    },
+  ];
 
   return (
     <main className="relative mx-auto flex min-h-screen w-full max-w-md items-start overflow-x-hidden px-3 py-4 md:justify-center md:py-8">
@@ -1033,49 +1113,48 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="rounded-2xl border border-blue-300/20 bg-[#061737]/75 p-1.5 shadow-[inset_0_1px_0_rgba(170,210,255,0.08)]">
-          <div className="grid grid-cols-3 gap-1.5">
-            <button
-              type="button"
-              onClick={() => handleModeSelection("classic")}
-              aria-pressed={selectedMode === "classic"}
-              className={`inline-flex min-h-10 w-full touch-manipulation items-center justify-center rounded-xl px-3 text-xs font-semibold uppercase tracking-wide transition-colors duration-200 ${
-                selectedMode === "classic"
-                  ? "border border-cyan-300/45 bg-gradient-to-r from-cyan-500/20 to-blue-500/30 text-cyan-100 shadow-[0_0_18px_rgba(56,189,248,0.25)]"
-                  : "border border-blue-200/15 bg-[#071a40]/70 text-slate-300 active:bg-[#0a224f]"
-              }`}
-            >
-              Classic
-            </button>
-            <button
-              type="button"
-              onClick={() => handleModeSelection("vip")}
-              aria-pressed={selectedMode === "vip"}
-              className={`inline-flex min-h-10 w-full touch-manipulation items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-semibold uppercase tracking-wide transition-colors duration-200 ${
-                selectedMode === "vip"
-                  ? "border border-fuchsia-300/55 bg-gradient-to-r from-fuchsia-500/25 to-pink-500/35 text-fuchsia-100 shadow-[0_0_20px_rgba(236,72,153,0.3)]"
-                  : "border border-blue-200/15 bg-[#071a40]/70 text-slate-300 active:bg-[#0a224f]"
-              }`}
-            >
-              <CrownIcon className={`h-3.5 w-3.5 ${selectedMode === "vip" ? "text-fuchsia-200" : "text-violet-200/80"}`} />
-              VIP Edition
-            </button>
-            <button
-              type="button"
-              onClick={() => handleModeSelection("live")}
-              aria-pressed={selectedMode === "live"}
-              className={`inline-flex min-h-10 w-full touch-manipulation items-center justify-center gap-1.5 rounded-xl px-2 text-[11px] font-semibold uppercase tracking-wide transition-colors duration-200 ${
-                selectedMode === "live"
-                  ? "border border-emerald-300/55 bg-gradient-to-r from-emerald-500/25 to-cyan-500/35 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.3)]"
-                  : "border border-blue-200/15 bg-[#071a40]/70 text-slate-300 active:bg-[#0a224f]"
-              }`}
-            >
-              <LiveSignalIcon className={`h-3.5 w-3.5 ${selectedMode === "live" ? "text-emerald-200" : "text-cyan-200/80"}`} />
-              Live Mode
-            </button>
+        <div className="rounded-2xl border border-blue-300/20 bg-[#061737]/75 p-2.5 shadow-[inset_0_1px_0_rgba(170,210,255,0.08)]">
+          <div className="grid grid-cols-2 gap-2.5">
+            {modeCards.map((card) => {
+              const isSelected = selectedMode === card.mode;
+              const Icon = card.Icon;
+              return (
+                <button
+                  key={card.mode}
+                  type="button"
+                  onClick={() => {
+                    handleModeSelection(card.mode);
+                    if (card.mode === "blind" && !playLocked && session && !isStartingPlay) {
+                      void startPlay("blind");
+                    }
+                  }}
+                  aria-pressed={isSelected}
+                  className={`group flex min-h-[116px] w-full touch-manipulation flex-col justify-between rounded-2xl border p-3 text-left transition-transform duration-200 hover:scale-105 active:brightness-110 ${
+                    isSelected ? card.selectedClassName : card.idleClassName
+                  }`}
+                >
+                  <span className="flex items-start justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-white/60">
+                        {card.eyebrow}
+                      </span>
+                      <span className="mt-1 block truncate text-lg font-black leading-tight text-white">
+                        {card.title}
+                      </span>
+                    </span>
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/12 ${card.iconClassName}`}>
+                      <Icon className="h-4 w-4" />
+                    </span>
+                  </span>
+                  <span className="mt-3 line-clamp-2 text-xs font-medium leading-snug text-white/78">
+                    {card.description}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <p className="mt-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
-            Active Mode: {selectedMode === "vip" ? "VIP Edition" : selectedMode === "live" ? "Live Mode" : "Classic"}
+          <p className="mt-2 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+            Active Mode: {gameModeLabel(selectedMode)}
           </p>
         </div>
 
@@ -1090,7 +1169,9 @@ export default function DashboardPage() {
         ) : (
           <button
             type="button"
-            onClick={startPlay}
+            onClick={() => {
+              void startPlay();
+            }}
             disabled={isStartingPlay || !session}
             className="relative h-14 w-full max-w-full touch-manipulation overflow-hidden rounded-2xl border border-blue-300/45 bg-[radial-gradient(75%_95%_at_0%_0%,rgba(76,151,255,0.42),transparent_70%),radial-gradient(95%_120%_at_100%_100%,rgba(34,211,238,0.25),transparent_72%),linear-gradient(92deg,#0f44b8_0%,#1261e2_45%,#1b8dfd_100%)] px-4 text-sm font-semibold uppercase tracking-[0.12em] text-white shadow-[0_14px_34px_rgba(24,110,255,0.45)] transition-colors duration-200 active:brightness-110 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-60"
           >

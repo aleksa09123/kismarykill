@@ -45,6 +45,8 @@ class User(Base):
     )
     profile_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interests: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    bio: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     country_code: Mapped[str | None] = mapped_column(String(2), nullable=True, index=True)
     country_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)

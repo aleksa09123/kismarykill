@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import VoteType
 from app.models.user import User
 from app.models.vote import Vote
 from app.schemas.vote import VoteInput
@@ -38,6 +39,11 @@ class VoteRepository:
         )
         await self.session.commit()
         return len(votes)
+
+    async def create_vote(self, *, voter_id: int, target_id: int, tip_glasa: VoteType) -> int:
+        self.session.add(Vote(voter_id=voter_id, target_id=target_id, tip_glasa=tip_glasa))
+        await self.session.commit()
+        return 1
 
     async def count_swipes_since(self, voter_id: int, since: datetime) -> int:
         stmt = (

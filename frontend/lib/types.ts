@@ -30,6 +30,38 @@ export type GetRoundBatchResponse = {
   rounds: GetRoundResponse[];
 };
 
+export type BlindModeRound = {
+  anonymous_hook: string;
+  unpopular_opinion: string;
+  vibe_check: string;
+  aesthetic_theme: string;
+};
+
+export type BlindModeRoundResult = {
+  round: BlindModeRound;
+  roundToken: string;
+};
+
+export type BlindModeSubmitRequest = {
+  action: VoteType;
+  round_token: string;
+};
+
+export type BlindModeRevealedProfile = {
+  target_id: number;
+  name: string;
+  profile_image_url?: string | null;
+  gender: string;
+  age?: number | null;
+};
+
+export type BlindModeSubmitResponse = {
+  status: string;
+  saved_votes: number;
+  action: VoteType;
+  revealed_profile: BlindModeRevealedProfile;
+};
+
 export type ZoneDebugNearestProfile = {
   user_id: number;
   name: string;

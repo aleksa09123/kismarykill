@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { BlindModeRound } from "@/components/blind-mode-round";
 import { GameRound } from "@/components/game-round";
 import { LiveModeRound } from "@/components/live-mode-round";
 import { fetchCurrentUser } from "@/lib/api";
@@ -96,6 +97,21 @@ export default function PlayPage() {
     setUser(patched?.user ?? nextUser);
   };
 
+  const handleBlindRoundSubmitted = () => {
+    const latestSession = readSession();
+    const fallbackUser = latestSession?.user ?? user;
+    if (!fallbackUser) {
+      return;
+    }
+
+    const nextUser: AuthUser = {
+      ...fallbackUser,
+      rounds_played: Math.max(0, fallbackUser.rounds_played) + 1
+    };
+    const patched = patchSessionUser(nextUser);
+    setUser(patched?.user ?? nextUser);
+  };
+
   if (isLoading || !session || !user) {
     return (
       <main className="relative mx-auto flex min-h-screen w-full max-w-md items-center justify-center overflow-x-hidden px-4">
@@ -127,6 +143,12 @@ export default function PlayPage() {
           <LiveModeRound
             currentUser={user}
             onBackToMenu={() => router.push("/dashboard")}
+          />
+        ) : mode === "blind" ? (
+          <BlindModeRound
+            accessToken={session.access_token}
+            onBackToMenu={() => router.push("/dashboard")}
+            onRoundSubmitted={handleBlindRoundSubmitted}
           />
         ) : (
           <GameRound

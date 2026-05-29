@@ -56,6 +56,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("REDIS_URL"),
     )
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash",
+        validation_alias=AliasChoices("GEMINI_MODEL"),
+    )
     environment: str = Field(
         default="development",
         validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT", "NODE_ENV"),

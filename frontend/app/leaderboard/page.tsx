@@ -24,6 +24,9 @@ function leaderboardModeLabel(mode: GameMode): string {
   if (mode === "live") {
     return "Live";
   }
+  if (mode === "blind") {
+    return "Blind";
+  }
   if (mode === "classic") {
     return "Classic";
   }

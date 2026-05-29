@@ -1,4 +1,7 @@
 import type {
+  BlindModeRoundResult,
+  BlindModeSubmitRequest,
+  BlindModeSubmitResponse,
   BotFeedbackResponse,
   AuthResponse,
   AuthUser,
@@ -309,6 +312,81 @@ export async function fetchRoundBatch(accessToken: string, count: number): Promi
     `/profiles/batch?count=${normalizedCount}`,
     {
       method: "GET"
+    },
+    accessToken
+  );
+}
+
+export async function fetchBlindModeRound(accessToken: string): Promise<BlindModeRoundResult> {
+  if (!API_BASE_URL) {
+    throw new ApiRequestError(
+      "Missing NEXT_PUBLIC_API_URL. Add it in frontend/.env.local and Vercel Environment Variables."
+    );
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const hadAuthorizationToken = Boolean(accessToken.trim());
+  try {
+    const response = await fetch(`${API_BASE_URL}/blind-mode`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      },
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const apiError = await buildApiError(response);
+      if (
+        shouldResetAuthState({
+          status: apiError.status,
+          detail: apiError.detail,
+          error: apiError.error,
+          hadAuthorizationToken,
+        })
+      ) {
+        hardResetAuthStateAndRedirectToLogin();
+        throw new ApiRequestError("Session expired. Redirecting to login.", apiError.status);
+      }
+      throw new ApiRequestError(apiError.message, apiError.status);
+    }
+
+    const roundToken = response.headers.get("X-Blind-Round-Token") ?? "";
+    if (!roundToken) {
+      throw new ApiRequestError("Blind Mode round token was missing from the API response.");
+    }
+
+    return {
+      round: await response.json(),
+      roundToken,
+    };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiRequestError("Blind Mode request timed out. Please try again.");
+    }
+    if (error instanceof ApiRequestError) {
+      throw error;
+    }
+    throw new ApiRequestError(
+      `Could not reach API at ${API_BASE_URL}. Check NEXT_PUBLIC_API_URL and backend CORS settings.`
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function submitBlindModeChoice(
+  payload: BlindModeSubmitRequest,
+  accessToken: string
+): Promise<BlindModeSubmitResponse> {
+  return request<BlindModeSubmitResponse>(
+    "/blind-mode/submit",
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
     },
     accessToken
   );
