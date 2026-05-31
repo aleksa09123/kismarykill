@@ -8,7 +8,7 @@ import { GameRound } from "@/components/game-round";
 import { LiveModeRound } from "@/components/live-mode-round";
 import { fetchCurrentUser } from "@/lib/api";
 import { clearSession, hasUnlockedProfilePhoto, patchSessionUser, readSession } from "@/lib/auth-session";
-import { normalizeGameMode, type GameMode, readActiveGameMode, writeActiveGameMode } from "@/lib/game-mode";
+import { DEFAULT_GAME_MODE, type GameMode, writeActiveGameMode } from "@/lib/game-mode";
 import type { AuthResponse, AuthUser, VoteType } from "@/lib/types";
 import { recordVIPRoundVotes } from "@/lib/vip-stats";
 
@@ -18,16 +18,15 @@ export default function PlayPage() {
   const [user, setUser] = useState<AuthUser | null>(() => readSession()?.user ?? null);
   const [isLoading, setIsLoading] = useState<boolean>(() => readSession() === null);
   const [warning, setWarning] = useState<string | null>(null);
-  const [mode, setMode] = useState<GameMode>(() => readActiveGameMode());
+  const [mode, setMode] = useState<GameMode>(DEFAULT_GAME_MODE);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    const queryMode = new URLSearchParams(window.location.search).get("mode");
-    const nextMode = queryMode ? normalizeGameMode(queryMode) : readActiveGameMode();
-    setMode(nextMode);
-    writeActiveGameMode(nextMode);
+
+    setMode(DEFAULT_GAME_MODE);
+    writeActiveGameMode(DEFAULT_GAME_MODE);
   }, []);
 
   useEffect(() => {

@@ -2,19 +2,20 @@ import { safeGetStorageItem, safeSetStorageItem } from "@/lib/safe-storage";
 
 export type GameMode = "classic" | "vip" | "blind" | "live";
 
+export const DEFAULT_GAME_MODE: GameMode = "blind";
 export const ACTIVE_GAME_MODE_STORAGE_KEY = "kmk_active_mode";
 export const ACTIVE_GAME_MODE_UPDATED_EVENT = "kmk:active-game-mode-updated";
 
 export function normalizeGameMode(value: string | null | undefined): GameMode {
-  if (value === "vip" || value === "blind" || value === "live") {
+  if (value === "classic" || value === "vip" || value === "blind" || value === "live") {
     return value;
   }
-  return "classic";
+  return DEFAULT_GAME_MODE;
 }
 
 export function readActiveGameMode(): GameMode {
   if (typeof window === "undefined") {
-    return "classic";
+    return DEFAULT_GAME_MODE;
   }
   return normalizeGameMode(safeGetStorageItem(ACTIVE_GAME_MODE_STORAGE_KEY));
 }

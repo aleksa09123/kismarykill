@@ -13,6 +13,7 @@ import { ENABLE_API_BOTS } from "@/lib/feature-flags";
 import {
   ACTIVE_GAME_MODE_STORAGE_KEY,
   ACTIVE_GAME_MODE_UPDATED_EVENT,
+  DEFAULT_GAME_MODE,
   type GameMode,
   readActiveGameMode,
   writeActiveGameMode
@@ -744,7 +745,7 @@ export default function DashboardPage() {
     if (!session || playLocked) {
       return;
     }
-    const modeForPlay = modeOverride ?? selectedMode;
+    const modeForPlay = modeOverride === "blind" ? modeOverride : DEFAULT_GAME_MODE;
 
     const locationForPlay: LocationSelectionResponse = {
       country_code: selectorCountryCode,
