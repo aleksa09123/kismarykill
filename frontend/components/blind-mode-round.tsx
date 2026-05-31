@@ -782,12 +782,12 @@ export function BlindModeRound({ accessToken, currentUser, onBackToMenu, onRound
           <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-100/70">
             Country
           </label>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="flex w-full flex-col items-stretch gap-3 sm:flex-row sm:items-center">
             <select
               value={selectedCountryCode}
               disabled={phase === "queue"}
               onChange={(event) => setSelectedCountryCode(event.target.value)}
-              className="min-h-11 rounded-2xl border border-violet-200/25 bg-[#0b1431] px-3 text-sm font-semibold text-white outline-none focus:border-cyan-200/60 disabled:opacity-60"
+              className="min-h-11 w-full rounded-2xl border border-violet-200/25 bg-[#0b1431] px-3 text-sm font-semibold text-white outline-none focus:border-cyan-200/60 disabled:opacity-60"
             >
               {countries.map((country) => (
                 <option key={country.country_code} value={country.country_code} className="bg-[#0b1431] text-white">
@@ -801,7 +801,7 @@ export function BlindModeRound({ accessToken, currentUser, onBackToMenu, onRound
               onClick={() => {
                 void joinQueue();
               }}
-              className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-cyan-200/35 bg-cyan-400/18 px-4 text-sm font-black uppercase tracking-wide text-cyan-50 transition-transform duration-200 hover:scale-105 active:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+              className="inline-flex min-h-11 w-full items-center justify-center rounded-2xl border border-cyan-200/35 bg-cyan-400/18 px-4 text-sm font-black uppercase tracking-wide text-cyan-50 transition-transform duration-200 hover:scale-105 active:brightness-110 disabled:cursor-not-allowed disabled:opacity-55 sm:w-auto sm:min-w-28"
             >
               Join
             </button>

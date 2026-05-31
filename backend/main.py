@@ -124,13 +124,19 @@ live_connection_manager = LiveConnectionManager()
 uploads_dir = os.path.join(BACKEND_DIR, "uploads")
 os.makedirs(uploads_dir, exist_ok=True)
 
+default_cors_origins = {
+    "https://kissmerrykil.com",
+    "https://www.kissmerrykil.com",
+    "https://kismarykill.com",
+    "https://www.kismarykill.com",
+    "https://kiss-merry-kill.vercel.app",
+    "https://kismarykill.vercel.app",
+}
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://kissmerrykil.com",
-        "https://www.kissmerrykil.com",
-        "https://kiss-merry-kill.vercel.app",
-    ],
+    allow_origins=sorted(default_cors_origins.union(settings.cors_origins_list)),
+    allow_origin_regex=settings.cors_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

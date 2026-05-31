@@ -116,17 +116,29 @@ function shouldResetAuthState(
     hadAuthorizationToken: boolean;
   }
 ): boolean {
-  const { status, detail, error, hadAuthorizationToken } = params;
+  const { detail, error, hadAuthorizationToken } = params;
   if (!hadAuthorizationToken) {
     return false;
   }
-  if (status === 401 || status === 403) {
+
+  const hasUserNotFoundSignal = containsUserNotFoundSignal(detail) || containsUserNotFoundSignal(error);
+  const hasCredentialSignal = containsCredentialValidationSignal(detail) || containsCredentialValidationSignal(error);
+  if (hasUserNotFoundSignal || hasCredentialSignal) {
     return true;
   }
-  if (containsUserNotFoundSignal(detail) || containsUserNotFoundSignal(error)) {
-    return true;
+
+  return false;
+}
+
+function buildRequestHeaders(init: RequestInit, token: string | undefined): Headers {
+  const headers = new Headers(init.headers);
+  if (init.body !== undefined && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
-  return containsCredentialValidationSignal(detail) || containsCredentialValidationSignal(error);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
 }
 
 async function buildApiError(response: Response): Promise<{
@@ -175,11 +187,7 @@ async function request<T>(path: string, init: RequestInit, accessToken?: string)
     try {
       return await fetch(`${API_BASE_URL}${path}`, {
         ...init,
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(init.headers ?? {})
-        },
+        headers: buildRequestHeaders(init, token),
         credentials: "include",
         cache: "no-store",
         signal: controller.signal
@@ -189,7 +197,7 @@ async function request<T>(path: string, init: RequestInit, accessToken?: string)
         throw new ApiRequestError("Request timed out. Please check phone Wi-Fi and backend server availability.");
       }
       throw new ApiRequestError(
-        `Could not reach API at ${API_BASE_URL}. Check NEXT_PUBLIC_API_URL and backend CORS settings.`
+        `Could not reach API at ${API_BASE_URL}. Check NEXT_PUBLIC_API_URL and backend CORS settings. Session was kept.`
       );
     } finally {
       clearTimeout(timeoutId);

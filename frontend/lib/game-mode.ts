@@ -6,11 +6,16 @@ export const DEFAULT_GAME_MODE: GameMode = "blind";
 export const ACTIVE_GAME_MODE_STORAGE_KEY = "kmk_active_mode";
 export const ACTIVE_GAME_MODE_UPDATED_EVENT = "kmk:active-game-mode-updated";
 
-export function normalizeGameMode(value: string | null | undefined): GameMode {
-  if (value === "classic" || value === "vip" || value === "blind" || value === "live") {
-    return value;
+export function parseGameMode(value: string | null | undefined): GameMode | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "classic" || normalized === "vip" || normalized === "blind" || normalized === "live") {
+    return normalized;
   }
-  return DEFAULT_GAME_MODE;
+  return null;
+}
+
+export function normalizeGameMode(value: string | null | undefined, fallback: GameMode = DEFAULT_GAME_MODE): GameMode {
+  return parseGameMode(value) ?? fallback;
 }
 
 export function readActiveGameMode(): GameMode {
