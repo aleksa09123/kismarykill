@@ -7,10 +7,21 @@ import { BlindModeRound } from "@/components/blind-mode-round";
 import { GameRound } from "@/components/game-round";
 import { LiveModeRound } from "@/components/live-mode-round";
 import { fetchCurrentUser } from "@/lib/api";
-import { clearSession, hasUnlockedProfilePhoto, patchSessionUser, readSession } from "@/lib/auth-session";
+import {
+  clearSession,
+  getAccessTokenExpiresAtMs,
+  hasUnlockedProfilePhoto,
+  isAccessTokenExpired,
+  patchSessionUser,
+  readSession,
+  recoverSessionSilently,
+  refreshSessionFromStorage
+} from "@/lib/auth-session";
 import { normalizeGameMode, type GameMode, readActiveGameMode, writeActiveGameMode } from "@/lib/game-mode";
 import type { AuthResponse, AuthUser, VoteType } from "@/lib/types";
 import { recordVIPRoundVotes } from "@/lib/vip-stats";
+
+const TOKEN_EXPIRY_LEEWAY_SECONDS = 60;
 
 export default function PlayPage() {
   const router = useRouter();
@@ -36,41 +47,113 @@ export default function PlayPage() {
   }, [router]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const redirectToLogin = () => {
+      clearSession();
+      router.replace("/login");
+    };
+
     const currentSession = readSession();
     if (!currentSession) {
       router.replace("/login");
       return;
     }
 
-    setSession(currentSession);
-    setUser(currentSession.user);
-    setWarning(null);
-    setIsLoading(false);
-
     const hydrate = async () => {
+      setIsLoading(true);
+      let activeSession = currentSession;
+
+      if (isAccessTokenExpired(activeSession.access_token, TOKEN_EXPIRY_LEEWAY_SECONDS)) {
+        const recovered = await recoverSessionSilently();
+        const recoveredSession = refreshSessionFromStorage();
+        if (
+          !recovered ||
+          !recoveredSession ||
+          isAccessTokenExpired(recoveredSession.access_token, TOKEN_EXPIRY_LEEWAY_SECONDS)
+        ) {
+          if (!cancelled) {
+            redirectToLogin();
+          }
+          return;
+        }
+        activeSession = recoveredSession;
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      setSession(activeSession);
+      setUser(activeSession.user);
+      setWarning(null);
+
       try {
-        const refreshedUser = await fetchCurrentUser(currentSession.access_token);
+        const refreshedUser = await fetchCurrentUser(activeSession.access_token);
         patchSessionUser(refreshedUser);
         if (!hasUnlockedProfilePhoto(refreshedUser.profile_image_url) || !refreshedUser.face_verified) {
           router.replace("/dashboard");
           return;
         }
-        setUser(refreshedUser);
+        if (!cancelled) {
+          setUser(refreshedUser);
+        }
       } catch (hydrateError) {
         const message =
           hydrateError instanceof Error
             ? hydrateError.message
             : "Could not refresh profile right now.";
-        setWarning(
-          `${message} Session is preserved, so you can retry without logging in again.`
-        );
+        if (!cancelled) {
+          setWarning(
+            `${message} Session is preserved, so you can retry without logging in again.`
+          );
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
 
     void hydrate();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
+
+  useEffect(() => {
+    if (!session?.access_token) {
+      return;
+    }
+
+    const expiresAtMs = getAccessTokenExpiresAtMs(session.access_token);
+    if (expiresAtMs === null) {
+      clearSession();
+      router.replace("/login");
+      return;
+    }
+
+    const timeoutMs = Math.max(0, expiresAtMs - Date.now() - TOKEN_EXPIRY_LEEWAY_SECONDS * 1000);
+    const timeoutId = window.setTimeout(() => {
+      void (async () => {
+        const recovered = await recoverSessionSilently();
+        const recoveredSession = refreshSessionFromStorage();
+        if (
+          recovered &&
+          recoveredSession &&
+          !isAccessTokenExpired(recoveredSession.access_token, TOKEN_EXPIRY_LEEWAY_SECONDS)
+        ) {
+          setSession(recoveredSession);
+          setUser(recoveredSession.user);
+          return;
+        }
+        clearSession();
+        router.replace("/login");
+      })();
+    }, timeoutMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [router, session?.access_token]);
 
   const logout = () => {
     clearSession();
@@ -113,7 +196,11 @@ export default function PlayPage() {
     setUser(patched?.user ?? nextUser);
   };
 
-  if (isLoading || !session || !user) {
+  const hasExpiredAccessToken = session
+    ? isAccessTokenExpired(session.access_token, TOKEN_EXPIRY_LEEWAY_SECONDS)
+    : false;
+
+  if (isLoading || !session || !user || hasExpiredAccessToken) {
     return (
       <main className="relative mx-auto flex min-h-screen w-full max-w-md items-center justify-center overflow-x-hidden px-4">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_55%_at_0%_0%,rgba(8,107,255,0.32),transparent_70%),radial-gradient(55%_45%_at_100%_6%,rgba(20,110,255,0.22),transparent_72%),linear-gradient(160deg,#010716_0%,#020c25_50%,#010913_100%)]" />

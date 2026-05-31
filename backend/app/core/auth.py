@@ -12,7 +12,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.config import MIN_PRODUCTION_ACCESS_TOKEN_EXPIRE_MINUTES, settings
 from app.core.database import get_async_session
 from app.models.enums import Gender
 from app.models.user import User
@@ -188,7 +188,7 @@ async def _sync_local_user_from_supabase_row(
 
 
 def create_access_token(user_id: int, expires_minutes: int | None = None) -> str:
-    lifetime = expires_minutes or settings.jwt_access_token_expire_minutes
+    lifetime = max(MIN_PRODUCTION_ACCESS_TOKEN_EXPIRE_MINUTES, expires_minutes or settings.jwt_access_token_expire_minutes)
     expires_at = datetime.now(UTC) + timedelta(minutes=lifetime)
     payload = {"sub": str(user_id), "exp": expires_at}
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
@@ -217,6 +217,50 @@ def decode_access_token(token: str) -> int:
             detail="Authentication service is temporarily unavailable",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+
+
+async def resolve_user_from_access_token(
+    *,
+    token: str | None,
+    session: AsyncSession,
+    supabase_client: object | None = None,
+) -> User | None:
+    if not token:
+        return None
+
+    user_id = decode_access_token(token)
+    user = await session.get(User, user_id)
+    if user is not None:
+        return user
+
+    if supabase_client is None:
+        return None
+
+    user_row: dict[str, object] | None = None
+    for attempt in range(2):
+        try:
+            response = (
+                supabase_client.table("users")
+                .select("*")
+                .eq("id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            user_row = _extract_supabase_row(response)
+            if user_row is not None:
+                break
+        except Exception:
+            logger.exception(
+                "Failed to fetch Supabase user by id during token resolution",
+                extra={"user_id": user_id, "attempt": attempt + 1},
+            )
+            if attempt == 0:
+                await asyncio.sleep(0.15)
+
+    if user_row is None:
+        return None
+
+    return await _sync_local_user_from_supabase_row(session=session, user_row=user_row)
 
 
 async def get_current_user(

@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+MIN_PRODUCTION_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 
 class Settings(BaseSettings):
@@ -82,16 +83,21 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @model_validator(mode="after")
-    def validate_jwt_secret(self) -> "Settings":
+    def validate_production_settings(self) -> "Settings":
         production_like = (
             self.environment.strip().lower() in {"production", "prod"}
             or os.environ.get("RENDER") == "true"
             or bool(os.environ.get("RENDER_SERVICE_ID"))
+            or bool(os.environ.get("RAILWAY_ENVIRONMENT"))
+            or bool(os.environ.get("RAILWAY_PROJECT_ID"))
+            or bool(os.environ.get("RAILWAY_SERVICE_ID"))
         )
         if production_like and self.jwt_secret_key == "change-this-in-production":
             raise ValueError(
                 "JWT_SECRET_KEY or SECRET_KEY must be configured in production to keep sessions stable across restarts."
             )
+        if production_like and self.jwt_access_token_expire_minutes < MIN_PRODUCTION_ACCESS_TOKEN_EXPIRE_MINUTES:
+            self.jwt_access_token_expire_minutes = MIN_PRODUCTION_ACCESS_TOKEN_EXPIRE_MINUTES
         return self
 
 

@@ -237,6 +237,39 @@ export function refreshSessionFromStorage(): AuthResponse | null {
   return readSession();
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const payload = token.split(".")[1];
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(globalThis.atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export function getAccessTokenExpiresAtMs(token: string | null | undefined): number | null {
+  const payload = token ? decodeJwtPayload(token) : null;
+  const exp = payload?.exp;
+  const expSeconds = typeof exp === "number" ? exp : Number.parseInt(String(exp ?? ""), 10);
+  if (!Number.isFinite(expSeconds) || expSeconds <= 0) {
+    return null;
+  }
+  return expSeconds * 1000;
+}
+
+export function isAccessTokenExpired(token: string | null | undefined, leewaySeconds = 60): boolean {
+  const expiresAtMs = getAccessTokenExpiresAtMs(token);
+  if (expiresAtMs === null) {
+    return true;
+  }
+  return expiresAtMs <= Date.now() + leewaySeconds * 1000;
+}
+
 export async function recoverSessionSilently(): Promise<boolean> {
   if (typeof window === "undefined") {
     return false;

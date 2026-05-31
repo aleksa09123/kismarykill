@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
-from app.core.auth import decode_access_token
+from app.core.auth import resolve_user_from_access_token
 from app.core.database import AsyncSessionLocal
 from app.models.enums import VoteType
 from app.models.user import User
@@ -62,16 +62,18 @@ def _choice_from_payload(value: object) -> VoteType | None:
     return None
 
 
-async def _user_from_token(token: str | None) -> User | None:
-    if not token:
-        return None
-    try:
-        user_id = decode_access_token(token)
-    except Exception:
-        return None
-
+async def _user_from_token(websocket: WebSocket, token: str | None) -> User | None:
+    supabase_client = getattr(websocket.app.state, "supabase", None)
     async with AsyncSessionLocal() as session:
-        return await session.get(User, user_id)
+        try:
+            return await resolve_user_from_access_token(
+                token=token,
+                session=session,
+                supabase_client=supabase_client,
+            )
+        except Exception:
+            await session.rollback()
+            return None
 
 
 class BlindModeConnectionManager:
@@ -455,8 +457,10 @@ blind_mode_connection_manager = BlindModeConnectionManager()
 @router.websocket("/ws/blind-mode")
 async def blind_mode_socket(websocket: WebSocket) -> None:
     country_code = _normalize_country_code(websocket.query_params.get("country"))
-    user = await _user_from_token(websocket.query_params.get("token"))
+    user = await _user_from_token(websocket, websocket.query_params.get("token"))
     if user is None:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "detail": "invalid_or_expired_token"})
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
