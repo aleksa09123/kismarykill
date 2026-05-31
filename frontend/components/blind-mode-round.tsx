@@ -147,6 +147,21 @@ function actionLabel(action: VoteType | null): string {
   return "No choice locked";
 }
 
+function isSecurePage(): boolean {
+  return typeof window !== "undefined" && window.location.protocol === "https:";
+}
+
+function normalizeWebSocketUrl(value: string): string {
+  const trimmed = value.trim();
+  const hasProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  const withProtocol = hasProtocol ? trimmed : `${isSecurePage() ? "wss" : "ws"}://${trimmed}`;
+  const websocketUrl = withProtocol
+    .replace(/^http:\/\//i, "ws://")
+    .replace(/^https:\/\//i, "wss://");
+
+  return isSecurePage() ? websocketUrl.replace(/^ws:\/\//i, "wss://") : websocketUrl;
+}
+
 function buildBlindWsUrl(accessToken: string, countryCode: string): string {
   const explicitBase = (process.env.NEXT_PUBLIC_BLIND_WS_URL ?? "").trim();
   const encodedCountry = encodeURIComponent(countryCode);
@@ -157,16 +172,17 @@ function buildBlindWsUrl(accessToken: string, countryCode: string): string {
       .replace("{country}", encodedCountry)
       .replace("{country_code}", encodedCountry)
       .replace("{token}", encodedToken);
+    const normalizedTemplated = normalizeWebSocketUrl(templated);
     if (templated !== explicitBase) {
-      return templated;
+      return normalizedTemplated;
     }
-    const separator = templated.includes("?") ? "&" : "?";
-    return `${templated.replace(/\/+$/, "")}${separator}country=${encodedCountry}&token=${encodedToken}`;
+    const separator = normalizedTemplated.includes("?") ? "&" : "?";
+    return `${normalizedTemplated.replace(/\/+$/, "")}${separator}country=${encodedCountry}&token=${encodedToken}`;
   }
 
   const fallbackHttpBase = API_BASE_URL || "https://kissmarykill-backend.onrender.com";
   const withoutTrailingSlash = fallbackHttpBase.replace(/\/+$/, "").replace(/\/api$/i, "");
-  const wsBase = withoutTrailingSlash.replace(/^http:\/\//i, "ws://").replace(/^https:\/\//i, "wss://");
+  const wsBase = normalizeWebSocketUrl(withoutTrailingSlash);
   return `${wsBase}/ws/blind-mode?country=${encodedCountry}&token=${encodedToken}`;
 }
 

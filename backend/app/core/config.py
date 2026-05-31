@@ -35,7 +35,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("RESEND_API_KEY"),
     )
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = (
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "https://kissmerrykil.com,"
+        "https://www.kissmerrykil.com,"
+        "https://kismarykill.vercel.app"
+    )
     cors_allow_origin_regex: str = (
         r"https?://(127\.0\.0\.1|localhost)(:\d+)?"
         r"|https://(kiss-merry-kill|kismarykill)(-[a-z0-9-]+)*\.vercel\.app"
